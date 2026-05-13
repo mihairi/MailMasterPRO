@@ -27,9 +27,9 @@ function App() {
               <Route path="email-templates" element={<EmailTemplates />} />
               <Route path="word-templates" element={<WordTemplates />} />
               <Route path="history" element={<History />} />
-              <Route path="api-keys" element={<ApiKeys />} />
-              <Route path="api-docs" element={<ApiDocs />} />
               <Route path="users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
+              <Route path="api-keys" element={<ProtectedRoute adminOnly><ApiKeys /></ProtectedRoute>} />
+              <Route path="api-docs" element={<ProtectedRoute adminOnly><ApiDocs /></ProtectedRoute>} />
             </Route>
           </Routes>
         </BrowserRouter>

@@ -401,19 +401,18 @@ async def get_logs(limit: int = 200, user=Depends(get_current_user)):
 
 # ----------------- API Keys -----------------
 @api.get("/api-keys")
-async def list_api_keys(user=Depends(get_current_user)):
-    q = {} if user["role"] == "admin" else {"owner_email": user["email"]}
-    items = await db.api_keys.find(q, {"_id": 0, "key_hash": 0}).to_list(200)
+async def list_api_keys(_admin=Depends(require_admin)):
+    items = await db.api_keys.find({}, {"_id": 0, "key_hash": 0}).to_list(200)
     return items
 
 
 @api.post("/api-keys")
-async def create_api_key(payload: ApiKeyCreateInput, user=Depends(get_current_user)):
+async def create_api_key(payload: ApiKeyCreateInput, admin=Depends(require_admin)):
     raw = "mk_" + secrets.token_urlsafe(32)
     doc = {
         "id": gen_id(),
         "name": payload.name,
-        "owner_email": user["email"],
+        "owner_email": admin["email"],
         "key_preview": raw[:10] + "...",
         "key_hash": hash_password(raw),
         "created_at": now_iso(),
@@ -424,9 +423,8 @@ async def create_api_key(payload: ApiKeyCreateInput, user=Depends(get_current_us
 
 
 @api.delete("/api-keys/{kid}")
-async def revoke_api_key(kid: str, user=Depends(get_current_user)):
-    q = {"id": kid} if user["role"] == "admin" else {"id": kid, "owner_email": user["email"]}
-    res = await db.api_keys.update_one(q, {"$set": {"revoked": True}})
+async def revoke_api_key(kid: str, _admin=Depends(require_admin)):
+    res = await db.api_keys.update_one({"id": kid}, {"$set": {"revoked": True}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}

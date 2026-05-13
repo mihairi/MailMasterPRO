@@ -11,12 +11,12 @@ const NAV = [
   { to: "/email-templates", label: "Email Templates", icon: FileText },
   { to: "/word-templates", label: "Word Templates", icon: FileDoc },
   { to: "/history", label: "History", icon: ClockCounterClockwise },
-  { to: "/api-keys", label: "API Keys", icon: Key },
-  { to: "/api-docs", label: "API Docs", icon: Code },
 ];
 
 const ADMIN_NAV = [
   { to: "/users", label: "Users", icon: UsersThree },
+  { to: "/api-keys", label: "API Keys", icon: Key },
+  { to: "/api-docs", label: "API Docs", icon: Code },
 ];
 
 export default function Layout() {
