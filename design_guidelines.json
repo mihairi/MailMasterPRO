@@ -1,0 +1,117 @@
+{
+  "theme": "light",
+  "archetype": "Archetype 4: Swiss & High-Contrast",
+  "rationale": "For an internal business productivity tool (mass mailing/mail merge), clarity, authority, and functional minimalism are paramount. We avoid decorative clutter and prioritize data density and scannability using strict grids and high-contrast typography.",
+  "colors": {
+    "background": "#F8F9FA",
+    "surface": "#FFFFFF",
+    "primary": "#002FA7",
+    "primary_hover": "#002080",
+    "secondary": "#111827",
+    "accent_warning": "#E53E3E",
+    "accent_success": "#10B981",
+    "border": "#E2E8F0",
+    "text_primary": "#111827",
+    "text_secondary": "#4B5563",
+    "text_tertiary": "#9CA3AF",
+    "text_on_primary": "#FFFFFF"
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Cabinet Grotesk, sans-serif",
+      "body": "IBM Plex Sans, sans-serif",
+      "mono": "IBM Plex Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-4xl sm:text-5xl tracking-tight font-black",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-bold",
+      "h4": "text-lg sm:text-xl font-semibold",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm",
+      "overline": "text-xs uppercase tracking-[0.2em] font-semibold text-text_secondary"
+    },
+    "rules": [
+      "Headings never use Inter or generic sans.",
+      "Never center text by default; use left-alignment to maintain the Swiss grid.",
+      "Use IBM Plex Mono for email tags like {first_name}, API keys, and metrics."
+    ]
+  },
+  "layout_and_spacing": {
+    "system": "The Control Room Grid",
+    "spacing_scale": "p-1, p-2, p-4, p-6, p-8, p-12",
+    "grid_gaps": "gap-4 to gap-8",
+    "rules": [
+      "Use 'Grid Borders' surface strategy: Expose the skeleton. Containers should have border-collapse style layouts with visible 1px borders.",
+      "Containers with borders MUST have internal padding (p-6 or p-8) to prevent text collision.",
+      "Card radius: Max 0px to 4px (sharp, structural feel)."
+    ]
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#002FA7] text-white rounded-none px-6 py-3 font-semibold hover:bg-[#002080] transition-colors focus:ring-2 focus:ring-[#002FA7] focus:ring-offset-2",
+      "secondary": "bg-transparent border border-[#111827] text-[#111827] rounded-none px-6 py-3 font-semibold hover:bg-[#111827] hover:text-white transition-colors"
+    },
+    "cards": {
+      "base": "bg-white border border-[#E2E8F0] rounded-none p-6 shadow-sm",
+      "hover": "hover:shadow-md hover:-translate-y-[2px] transition-all duration-200"
+    },
+    "inputs": {
+      "base": "rounded-none border border-[#E2E8F0] bg-white px-4 py-2 text-[#111827] focus:border-[#002FA7] focus:ring-1 focus:ring-[#002FA7] outline-none transition-all"
+    },
+    "tables": {
+      "base": "w-full text-left border-collapse",
+      "header": "border-b-2 border-[#111827] text-sm uppercase tracking-wider font-semibold py-3",
+      "row": "border-b border-[#E2E8F0] hover:bg-[#F8F9FA] transition-colors",
+      "cell": "py-4 px-2"
+    }
+  },
+  "media": {
+    "images": [
+      {
+        "category": "login_background",
+        "url": "https://static.prod-images.emergentagent.com/jobs/9b2428a8-2445-44e2-bbda-4e1f2d4055e6/images/b8e5a1fac0b74b13d4f13285bf9394766acb831a9654039db2aca3b2e9c29249.png",
+        "description": "Minimalist swiss poster abstract geometric background, light grey and stark white with subtle klein blue and signal red accents."
+      },
+      {
+        "category": "app_logo",
+        "url": "https://static.prod-images.emergentagent.com/jobs/9b2428a8-2445-44e2-bbda-4e1f2d4055e6/images/b5a04b9704d70962fbe823513f48b74a3f30aa7aae99f7f18e93a35cd3582d23.png",
+        "description": "Minimalist tech brand logo, simple geometric folded paper plane, stark contrast."
+      },
+      {
+        "category": "avatar_1",
+        "url": "https://images.unsplash.com/photo-1762522926157-bcc04bf0b10a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3ODY2NjAwMnww&ixlib=rb-4.1.0&q=85"
+      },
+      {
+        "category": "avatar_2",
+        "url": "https://images.unsplash.com/photo-1576558656222-ba66febe3dec?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3ODY2NjAwMnww&ixlib=rb-4.1.0&q=85"
+      },
+      {
+        "category": "avatar_3",
+        "url": "https://images.unsplash.com/photo-1655249493799-9cee4fe983bb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3ODY2NjAwMnww&ixlib=rb-4.1.0&q=85"
+      }
+    ]
+  },
+  "motion": {
+    "hover_states": "Visible but rigid. Slight scale (1.02) or -translate-y-1 for interactive cards. Strict color inversions for buttons.",
+    "transitions": "Fast and snappy. 150ms-200ms duration. No bouncy/springy animations. Ease-in-out.",
+    "page_load": "Staggered fade-up for table rows and grid items."
+  },
+  "page_specific_rules": {
+    "login": "Split screen layout. Left: Crisp white background, left-aligned form with massive typography. Right: The abstract geometric background image covering the full height.",
+    "dashboard": "Bento-style metrics grid at the top. Charts underneath. Use visible borders (border-collapse look) to separate KPI blocks. No rounded corners.",
+    "campaign_composer": "Three-pane layout or wide 2-column. Left/Top: Settings (Excel/Word uploads). Center/Main: HTML WYSIWYG Editor. Use IBM Plex Mono for displaying {} merge tags.",
+    "templates_library": "High-density data tables. Focus on scannability. Use the 'avatar' images for template creators.",
+    "api_management": "Use the 'Retro-Futurism' micro-theme strictly for the API Key display widget (dark background, monospaced text) to contrast with the rest of the light Swiss UI."
+  },
+  "testing": {
+    "requirements": "All interactive and key informational elements MUST include a 'data-testid' attribute in kebab-case."
+  },
+  "instructions_to_main_agent": [
+    "Use raw HTML/Tailwind for structural layouts to enforce the sharp, Swiss 'Grid Borders' style.",
+    "Use Shadcn components for complex interactions (dropdowns, dialogs, forms) but strip their default soft radius and drop-shadows to match the 0px/sharp aesthetic.",
+    "Install Phosphor Icons (@phosphor-icons/react) for sharp, dense dashboard icons.",
+    "Use Recharts for the analytics dashboard charts, styled with plain black lines or the primary International Klein Blue. No gradients in charts.",
+    "Code must be in React .js or .jsx (not .tsx as per constraints)."
+  ]
+}
