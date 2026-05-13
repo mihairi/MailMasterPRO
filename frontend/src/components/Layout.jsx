@@ -38,7 +38,7 @@ export default function Layout() {
               <PaperPlaneTilt size={18} color="white" weight="fill" />
             </div>
             <div>
-              <div className="font-display text-base leading-none">MAILMERGE</div>
+              <div className="font-display text-base leading-none">MAILMASTER PRO</div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-[#9CA3AF] mt-1">Control Room</div>
             </div>
           </div>

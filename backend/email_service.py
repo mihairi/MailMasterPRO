@@ -14,7 +14,7 @@ def get_smtp_config() -> dict:
         "user": os.environ.get("SMTP_USER", ""),
         "password": os.environ.get("SMTP_PASS", ""),
         "from_addr": os.environ.get("SMTP_FROM", ""),
-        "from_name": os.environ.get("SMTP_FROM_NAME", "Mass Mailer"),
+        "from_name": os.environ.get("SMTP_FROM_NAME", "MailMaster PRO"),
         "use_tls": (os.environ.get("SMTP_USE_TLS", "true").lower() == "true"),
     }
 

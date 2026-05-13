@@ -34,7 +34,7 @@ mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
-app = FastAPI(title="Mass Mailer API")
+app = FastAPI(title="MailMaster PRO API")
 api = APIRouter(prefix="/api")
 
 STORAGE_DIR = ROOT_DIR / "storage"
@@ -45,7 +45,7 @@ WORD_TEMPLATES_DIR.mkdir(exist_ok=True)
 UPLOADS_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("mass-mailer")
+logger = logging.getLogger("mailmaster-pro")
 
 
 # ----------------- Helpers -----------------
@@ -523,7 +523,7 @@ async def stats(user=Depends(get_current_user)):
 
 @api.get("/")
 async def root():
-    return {"service": "mass-mailer", "status": "ok"}
+    return {"service": "mailmaster-pro", "status": "ok"}
 
 
 # ----------------- App wiring -----------------

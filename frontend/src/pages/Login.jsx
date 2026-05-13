@@ -30,7 +30,7 @@ export default function Login() {
           <div className="w-9 h-9 bg-[#002FA7] flex items-center justify-center">
             <PaperPlaneTilt size={20} color="white" weight="fill" />
           </div>
-          <div className="font-display text-lg">MAILMERGE</div>
+          <div className="font-display text-lg">MAILMASTER PRO</div>
         </div>
 
         <div className="max-w-md w-full fade-up">
@@ -83,7 +83,7 @@ export default function Login() {
           </div>
         </div>
 
-        <div className="text-xs text-[#9CA3AF]">© Mailmerge — Personalised dispatch grid.</div>
+        <div className="text-xs text-[#9CA3AF]">© MailMaster PRO — Personalised dispatch grid.</div>
       </div>
 
       {/* Right: visual */}
