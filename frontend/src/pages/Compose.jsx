@@ -24,7 +24,7 @@ export default function Compose() {
     api.get("/word-templates").then((r) => setWordTemplates(r.data)).catch(() => {});
     api.get("/email-templates").then((r) => setEmailTemplates(r.data)).catch(() => {});
   };
-  useEffect(reload, []);
+  useEffect(() => { reload(); }, []);
 
   const onExcelChange = async (e) => {
     const f = e.target.files?.[0];

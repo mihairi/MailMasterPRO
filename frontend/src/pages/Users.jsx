@@ -19,7 +19,7 @@ export default function Users() {
   const [error, setError] = useState("");
 
   const load = () => api.get("/users").then((r) => setUsers(r.data)).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const create = async () => {
     setError("");

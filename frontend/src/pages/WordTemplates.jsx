@@ -12,7 +12,7 @@ export default function WordTemplates() {
   const fileRef = useRef(null);
 
   const load = () => api.get("/word-templates").then((r) => setItems(r.data)).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const upload = async () => {
     setError("");

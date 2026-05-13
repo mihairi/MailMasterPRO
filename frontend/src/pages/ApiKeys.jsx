@@ -10,7 +10,7 @@ export default function ApiKeys() {
   const [error, setError] = useState("");
 
   const load = () => api.get("/api-keys").then((r) => setKeys(r.data)).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const create = async () => {
     setError("");
