@@ -105,7 +105,7 @@ async def login(payload: LoginInput, response: Response):
 
 
 @api.post("/auth/logout")
-async def logout(response: Response, _user=Depends(get_current_user)):
+async def logout(response: Response):
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
     return {"ok": True}
