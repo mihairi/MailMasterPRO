@@ -80,6 +80,7 @@ body {
   box-shadow: 0 0 0 1px hsl(var(--primary));
 }
 .rich-editor img { max-width: 100%; height: auto; }
+.rich-editor img.re-selected { outline: 2px solid #002FA7; outline-offset: 1px; }
 .rich-editor p { margin: 0 0 8px; }
 
 /* Page load animations */
