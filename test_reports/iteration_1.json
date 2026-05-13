@@ -1,0 +1,42 @@
+{
+  "summary": "Backend testing for Mass Mailer API. 17/17 pytest tests passed against the public REACT_APP_BACKEND_URL. Covered auth (login/me/logout/cookies+bearer), admin-only users CRUD with 403 for non-admin, email templates CRUD, word template upload (docx)+delete+reject non-docx, /api/excel/parse with generated xlsx, /api/campaigns/send with and without word_template_id (SMTP fails as expected; send_logs persisted with status=failed, source=ui, attachment_name set when PDF generated), /api/logs, /api/api-keys lifecycle (raw key returned once, preview only on list, no key_hash leaked), /api/external/send (401 for missing/wrong/revoked key, valid key triggers send with source=api, campaign_id and logs persisted), and /api/stats. LibreOffice PDF generation succeeded and pikepdf attachment_name (invoice.pdf) was written to logs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/logout", "issue": "Requires a valid access token (Depends(get_current_user)). If the access cookie/header is missing/expired the user cannot logout, even though logout is purely a cookie-clear operation. Recommend allowing unauthenticated logout (just clear cookies)."},
+      {"endpoint": "POST /api/users", "issue": "Password has no minimum length validation; accepts very short passwords like 'x'. Recommend Pydantic constr(min_length=6)."},
+      {"endpoint": "GET /api/api-keys (non-admin)", "issue": "Filters by owner_email, but key creation stores owner_email = current user. Works as intended; no issue, but worth noting that a normal user has full create/list/revoke on their own keys (intended by problem statement)."},
+      {"endpoint": "POST /api/external/send", "issue": "_validate_api_key iterates all non-revoked keys and bcrypt-verifies each — O(N) per request and slow at scale. Consider storing a HMAC/SHA256 lookup hash to find the key in O(1), then bcrypt-verify only that one."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Consider relaxing /api/auth/logout to not require authentication (clear cookies regardless)",
+    "Add password min-length validation on POST /api/users",
+    "Optimize API key validation (O(1) lookup hash) — not blocking"
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~570 lines; manageable but approaching the threshold where splitting into routers (auth/users/templates/campaigns/api_keys) would help.",
+    "doc_service.build_personalized_pdf is executed inside the request lifecycle for every recipient (await asyncio.to_thread). For large campaigns this should be moved to a background queue (BackgroundTasks/Celery).",
+    "send_logs has no index on campaign_id or user_email — listing logs and stats will get slow as logs grow. Add compound indexes.",
+    "CORS allow_origins='*' combined with allow_credentials=True is permitted by Starlette but is risky; restrict to known origins for production.",
+    "Logout returns 401 if access token expired; consider clearing cookies regardless of auth state.",
+    "API key validation does bcrypt over every key (O(N) bcrypts). Use a deterministic lookup hash (SHA256/HMAC) for O(1) retrieval.",
+    "No rate limiting / brute-force lockout on /api/auth/login (the playbook hint mentioned 5-failure lockout). Currently absent.",
+    "bcrypt format verified: hashes start with $2b$ (verified via auth.hash_password)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (not tested per request)"},
+  "test_credentials": "admin@example.com / admin123 (seeded on startup)",
+  "seed_data_creation": "Tests create TEST_-prefixed users, email templates, word templates, and API keys, and clean them up at teardown. Some send_logs from SMTP-fail campaigns remain (intentional; reviewer can inspect).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully working. SMTP intentionally unreachable (smtp.example.com) — all send flows record failures in /api/logs with status=failed and proper source (ui/api). The campaign endpoints still return 200 with campaign_id. /api/external/send correctly validates X-API-Key (missing/wrong/revoked all → 401). PDF generation via LibreOffice+pikepdf works (attachment_name 'invoice.pdf' verified in logs).",
+  "rca of the issue": "N/A — no critical issues found."
+}
