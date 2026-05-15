@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import RichTextEditor from "@/components/RichTextEditor";
+import PreviewPanel from "@/components/PreviewPanel";
 import { Header } from "@/pages/Dashboard";
-import { UploadSimple, Trash, PaperPlaneTilt, CheckCircle, Warning, FloppyDisk } from "@phosphor-icons/react";
+import { UploadSimple, Trash, PaperPlaneTilt, CheckCircle, Warning, FloppyDisk, Eye, EyeSlash } from "@phosphor-icons/react";
 
 export default function Compose() {
   const [subject, setSubject] = useState("");
@@ -18,6 +19,7 @@ export default function Compose() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [saveName, setSaveName] = useState("");
+  const [showPreview, setShowPreview] = useState(true);
   const xlsxRef = useRef(null);
 
   const reload = () => {
@@ -250,10 +252,37 @@ export default function Compose() {
         </div>
       </div>
 
+      {/* Personalized preview */}
+      {rows.length > 0 && (
+        <div className="mt-10">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-heading text-xl">Personalised preview</h2>
+            <button
+              type="button"
+              onClick={() => setShowPreview((s) => !s)}
+              data-testid="toggle-preview-button"
+              className="text-xs uppercase tracking-[0.2em] text-[#002FA7] hover:underline flex items-center gap-1"
+            >
+              {showPreview ? <><EyeSlash size={14} /> Hide</> : <><Eye size={14} /> Show</>}
+            </button>
+          </div>
+          {showPreview && (
+            <PreviewPanel
+              subject={subject}
+              bodyHtml={bodyHtml}
+              headers={headers}
+              rows={rows}
+              wordTemplate={wordTemplates.find((w) => w.id === wordTemplateId) || null}
+              attachmentBasename={attachmentBasename}
+            />
+          )}
+        </div>
+      )}
+
       {/* Preview rows */}
       {rows.length > 0 && (
         <div className="mt-10">
-          <h2 className="font-heading text-xl mb-3">Recipients preview <span className="text-xs text-[#9CA3AF] font-normal">(first 10)</span></h2>
+          <h2 className="font-heading text-xl mb-3">Recipients data <span className="text-xs text-[#9CA3AF] font-normal">(first 10)</span></h2>
           <div className="border border-[#E2E8F0] bg-white overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
