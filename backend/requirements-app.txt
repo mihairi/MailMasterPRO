@@ -1,0 +1,17 @@
+# MailMaster PRO — minimal Python dependencies for self-hosted installation.
+# Keep this list small and pinned to known-good versions.
+
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-dotenv==1.0.1
+motor==3.5.1
+pymongo==4.8.0
+pydantic==2.9.2
+email-validator==2.2.0
+python-multipart==0.0.9
+bcrypt==4.2.0
+PyJWT==2.9.0
+openpyxl==3.1.5
+python-docx==1.1.2
+docxtpl==0.19.0
+pikepdf==9.4.0
