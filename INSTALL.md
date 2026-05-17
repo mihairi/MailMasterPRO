@@ -2,16 +2,16 @@
 
 Self-hosted setup for **Ubuntu/Debian Linux** and **Windows 10/11**.
 
-The app has three runtime dependencies:
+The app has just three runtime dependencies — **no separate database server**.
 
 | Component | Why |
 |---|---|
 | **Python 3.11+** | FastAPI backend (`/app/backend`) |
 | **Node.js 20+ & Yarn** | React frontend (`/app/frontend`) |
-| **MongoDB 7** | Stores users, templates, send logs, API keys |
 | **LibreOffice (headless)** | Renders Word `.docx` → PDF for attachments |
+| _Storage_ | **SQLite + SQLCipher** — single AES-256-encrypted file (`backend/data/mailmaster.db`). No DB server to install, configure, or back up separately. |
 
-The backend listens on `:8001`, the frontend on `:3000`, and MongoDB on `:27017`.
+The backend listens on `:8001`, the frontend on `:3000`.
 
 ---
 
@@ -41,36 +41,56 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\start_windows.ps1
 ```
 
-Open `http://localhost:3000`. Default admin: **`admin@example.com` / `admin123`** — change this immediately in `backend/.env` then restart the backend.
+Open `http://localhost:3000`. Default admin: **`admin@example.com` / `admin123`** — change it immediately in `backend/.env` then restart the backend.
+
+---
+
+## What's encrypted, and how
+
+| Layer | Tech | Notes |
+|---|---|---|
+| **DB at rest** | SQLCipher (AES-256-CBC + HMAC-SHA512, PBKDF2 key derivation) | `DB_ENCRYPTION_KEY` in `backend/.env`; the `.db` file is unreadable without it |
+| **Passwords (users)** | bcrypt (cost 12) | Never stored in plain text |
+| **API keys** | bcrypt | Raw key shown only once at creation |
+| **JWT** | HS256 + `JWT_SECRET` | httpOnly cookies + Bearer fallback |
+| **PDF attachments** | pikepdf AES-256 | Per-recipient password from Excel column 2 |
+| **In-transit** | TLS — terminate at nginx / IIS in production | See deployment section |
+
+### ⚠️ Key management
+
+Two secrets in `backend/.env` must be safe-guarded:
+
+- `JWT_SECRET` — random 64-hex; rotating it logs everyone out (harmless).
+- `DB_ENCRYPTION_KEY` — **losing it makes the DB file permanently unreadable**. Back up `backend/.env` together with `backend/data/`.
+
+The installers generate strong random values for both on first run.
 
 ---
 
 ## What the installers do
 
 ### `scripts/install_ubuntu.sh`
-1. `apt install` Python 3, Node.js 20, MongoDB 7 (official repo), LibreOffice writer, Git
+1. `apt install` Python 3, Node.js 20, LibreOffice (writer), Git, build tools
 2. `npm install -g yarn`
 3. `python -m venv backend/.venv` + `pip install -r backend/requirements-app.txt`
-4. Generates `backend/.env` (random JWT secret, empty SMTP — you fill in)
-5. Generates `frontend/.env` pointing to `http://localhost:8001`
-6. `yarn install` in `frontend/`
-7. Enables & starts `mongod` via systemd
+   - Pulls `sqlcipher3-wheels` (manylinux **aarch64 + x86_64** wheels included — no compile)
+4. Generates `backend/.env` with random `JWT_SECRET` and `DB_ENCRYPTION_KEY` (48-byte URL-safe)
+5. Sets `backend/.env` to mode `600` and `backend/data/` to `700`
+6. Generates `frontend/.env` pointing to `http://localhost:8001`
+7. `yarn install` in `frontend/`
 
 ### `scripts/install_windows.ps1`
 Uses **winget** to install:
 - `Python.Python.3.12`
 - `OpenJS.NodeJS.LTS`
-- `MongoDB.Server` (runs as a Windows service)
 - `TheDocumentFoundation.LibreOffice`
 - `Git.Git`
 
-Then it adds LibreOffice (`soffice.exe`) to PATH, creates `backend\.venv`, installs Python deps, generates `.env` files, runs `yarn install`.
+Then adds LibreOffice (`soffice.exe`) to PATH, creates `backend\.venv`, installs Python deps (including `sqlcipher3-wheels` Windows wheel), generates `.env` files, runs `yarn install`.
 
 ---
 
 ## Manual installation (no scripts)
-
-If you prefer step-by-step, here are the equivalent commands.
 
 ### Ubuntu / Debian
 
@@ -85,22 +105,11 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo npm install -g yarn
 
-# MongoDB 7 (Ubuntu 22.04 example — see official docs for other distros)
-curl -fsSL https://pgp.mongodb.com/server-7.0.asc | \
-  sudo gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor
-echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] \
-  https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | \
-  sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
-sudo apt update
-sudo apt install -y mongodb-org
-sudo systemctl enable --now mongod
-
 # Backend
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-app.txt
-cp .env.example .env   # or create per the template below
 deactivate
 cd ..
 
@@ -110,12 +119,13 @@ yarn install
 cd ..
 ```
 
+Then create `backend/.env` (see template below) and `frontend/.env`.
+
 ### Windows (manual, no winget)
 
 Download and install:
 - **Python 3.12** — https://www.python.org/downloads/ (check *Add Python to PATH*)
 - **Node.js 20 LTS** — https://nodejs.org/
-- **MongoDB Community 7** — https://www.mongodb.com/try/download/community (install as a Service)
 - **LibreOffice** — https://www.libreoffice.org/download/download/ (then add `C:\Program Files\LibreOffice\program` to PATH)
 - **Git** — https://git-scm.com/download/win
 
@@ -134,21 +144,26 @@ yarn install
 cd ..
 ```
 
+> **Note**: no MongoDB, no separate DB service. The encrypted SQLite file is created automatically on first backend start at `backend\data\mailmaster.db`.
+
 ---
 
 ## Environment files
 
 ### `backend/.env`
 ```dotenv
-MONGO_URL="mongodb://localhost:27017"
-DB_NAME="mailmaster"
 CORS_ORIGINS="http://localhost:3000"
 
+# --- Auth ---
 JWT_SECRET="<64-char-random-hex>"
 ADMIN_EMAIL="admin@example.com"
 ADMIN_PASSWORD="changeme"
 
-# --- SMTP (required for sending emails) ---
+# --- Storage (encrypted SQLite via SQLCipher) ---
+DB_PATH="data/mailmaster.db"
+DB_ENCRYPTION_KEY="<48-byte-random-url-safe-string>"
+
+# --- SMTP ---
 SMTP_HOST="smtp.your-provider.com"
 SMTP_PORT="587"
 SMTP_USER="you@your-domain.com"
@@ -160,6 +175,7 @@ SMTP_USE_TLS="true"
 
 > **Double-quote every value**. Special characters like `$`, `#`, `!` won't get shell-expanded.
 > Generate a JWT secret: `python -c "import secrets; print(secrets.token_hex(32))"`
+> Generate an encryption key: `python -c "import secrets; print(secrets.token_urlsafe(48))"`
 
 ### `frontend/.env`
 ```dotenv
@@ -167,7 +183,7 @@ REACT_APP_BACKEND_URL=http://localhost:8001
 WDS_SOCKET_PORT=3000
 ```
 
-For production (different host), set `REACT_APP_BACKEND_URL` to your public backend URL **before** running `yarn build`.
+For production, set `REACT_APP_BACKEND_URL` to your public backend URL **before** running `yarn build`.
 
 ---
 
@@ -182,7 +198,7 @@ For production (different host), set `REACT_APP_BACKEND_URL` to your public back
 | Amazon SES | `email-smtp.<region>.amazonaws.com` | 587 | true | SES SMTP username | SES SMTP password |
 | Local Postfix | `localhost` | 25 | false | (empty) | (empty) |
 
-Use port `465` only if your provider explicitly requires SSL — and set `SMTP_USE_TLS="false"` in that case.
+Port `465` → set `SMTP_USE_TLS="false"` (SSL, not STARTTLS).
 
 ---
 
@@ -194,26 +210,57 @@ bash scripts/start.sh
 ```
 - Backend → `http://localhost:8001/api/`
 - Frontend → `http://localhost:3000`
-- Press `Ctrl+C` once; the script kills the backend too.
+- `Ctrl+C` once stops both.
 
 ### Windows
 ```powershell
 .\scripts\start_windows.ps1
 ```
-Opens two PowerShell windows (one per process). Close each to stop.
+Opens two PowerShell windows; close each to stop.
+
+---
+
+## Backup & restore
+
+Because the entire database is **one file**, backups are trivial:
+
+```bash
+# Linux — daily cron
+sqlite3 backend/data/mailmaster.db ".backup '/backups/mm-$(date +%F).db'"
+# Or just stop the backend and: cp backend/data/mailmaster.db /backups/mm-$(date +%F).db
+```
+
+**Restore**: copy the `.db` file back into `backend/data/` and ensure the **same `DB_ENCRYPTION_KEY`** is set in `backend/.env`. Restart the backend.
+
+> Important: word-template `.docx` files live in `backend/storage/word_templates/` (not in the DB). Back up `backend/` as a whole, plus `backend/.env`.
+
+---
+
+## Inspecting the database manually
+
+For debugging, you can open the DB with the `sqlcipher` CLI:
+
+```bash
+# Linux
+sudo apt install sqlcipher
+sqlcipher backend/data/mailmaster.db
+sqlite> PRAGMA key = '<paste DB_ENCRYPTION_KEY value>';
+sqlite> .tables
+sqlite> SELECT email, role FROM users;
+```
+
+Without the correct key, `.tables` returns `Error: file is not a database`.
 
 ---
 
 ## Production deployment (Linux)
-
-Use **systemd** + **nginx**.
 
 ### `/etc/systemd/system/mailmaster-backend.service`
 
 ```ini
 [Unit]
 Description=MailMaster PRO backend (FastAPI)
-After=network.target mongod.service
+After=network.target
 
 [Service]
 Type=simple
@@ -228,12 +275,13 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
+> **Workers**: SQLite with WAL mode handles 2–4 uvicorn workers fine for this workload (mostly read-heavy with bursts on send). Don't go above 4 unless you've measured.
+
 ### Frontend production build
 
 ```bash
 cd frontend
 REACT_APP_BACKEND_URL=https://your-domain.example yarn build
-# Serve the resulting build/ directory with nginx
 ```
 
 ### nginx example
@@ -256,20 +304,19 @@ server {
         try_files $uri /index.html;
     }
 
-    client_max_body_size 50m;   # excel + docx + base64 images
+    client_max_body_size 50m;
 }
 ```
 
-Run with TLS (Let's Encrypt) — `sudo certbot --nginx -d your-domain.example`.
+`sudo certbot --nginx -d your-domain.example` for TLS.
 
 ---
 
 ## Production deployment (Windows)
 
-Use **NSSM** (Non-Sucking Service Manager) to install the backend as a Windows service:
+Use **NSSM** (Non-Sucking Service Manager):
 
 ```powershell
-# Download NSSM from https://nssm.cc/ and extract to C:\nssm
 C:\nssm\nssm.exe install MailMasterBackend `
   "C:\path\to\mailmaster\backend\.venv\Scripts\uvicorn.exe" `
   "server:app --host 127.0.0.1 --port 8001"
@@ -277,7 +324,7 @@ C:\nssm\nssm.exe set MailMasterBackend AppDirectory "C:\path\to\mailmaster\backe
 C:\nssm\nssm.exe start MailMasterBackend
 ```
 
-Build the frontend (`yarn build`) and serve `build\` via IIS or any static file server. Proxy `/api/*` to `http://localhost:8001`.
+Build the frontend (`yarn build`) and serve `build\` via IIS, with `/api/*` reverse-proxied to `http://localhost:8001`.
 
 ---
 
@@ -285,18 +332,17 @@ Build the frontend (`yarn build`) and serve `build\` via IIS or any static file 
 
 | Symptom | Fix |
 |---|---|
-| `mongo: command not found` / connection refused | `sudo systemctl start mongod` (Linux) or start MongoDB service (Windows) |
-| `soffice: command not found` | Re-run installer or add `C:\Program Files\LibreOffice\program` to PATH (Windows) |
-| PDF conversion hangs once | Pre-warm LibreOffice: `soffice --headless --terminate_after_init` |
+| `sqlcipher3.dbapi2.DatabaseError: file is not a database` | Wrong `DB_ENCRYPTION_KEY`, or the DB was created by a different key. Either restore the right key or delete `backend/data/mailmaster.db` to start fresh. |
+| `soffice: command not found` | Re-run installer; on Windows ensure `C:\Program Files\LibreOffice\program` is in PATH |
+| First PDF conversion is slow | Pre-warm: `soffice --headless --terminate_after_init` |
 | `Authentication failed` on SMTP | For Gmail/Outlook use an **app password**; for SendGrid the user is literally `apikey` |
-| 401 on `/api/auth/me` after login | Backend `CORS_ORIGINS` must include the exact frontend URL when using cookies |
-| Port already in use | Change frontend port: `PORT=3001 yarn start`; backend: edit `start.sh` or pass `--port 8002` |
-| White screen / blank UI | Hard refresh (Ctrl+Shift+R) — service worker / cached old build |
+| 401 on `/api/auth/me` after login | `CORS_ORIGINS` must include the exact frontend origin when sending cookies |
+| Port in use | Frontend: `PORT=3001 yarn start`. Backend: edit `start.sh` (or pass `--port 8002`). |
+| `database is locked` errors under load | Make sure WAL mode is on (it is by default); avoid running multiple `uvicorn --workers` higher than 4 with heavy concurrent writes |
 
 ### Logs
-- Backend: stdout of `uvicorn` (script foreground) or `journalctl -u mailmaster-backend -f` (systemd) / Windows service stdout via NSSM
-- MongoDB: `journalctl -u mongod -f` (Linux), Event Viewer (Windows)
-- LibreOffice: any conversion error shows up in the FastAPI response
+- Backend: stdout of `uvicorn` (script foreground) or `journalctl -u mailmaster-backend -f` (systemd) / NSSM stdout on Windows
+- LibreOffice errors bubble up in the FastAPI response
 
 ---
 
@@ -308,13 +354,12 @@ git pull
 source backend/.venv/bin/activate && pip install -r backend/requirements-app.txt && deactivate
 cd frontend && yarn install && cd ..
 sudo systemctl restart mailmaster-backend     # production
-# OR re-run scripts/start.sh for dev
 ```
 
-On Windows: `.\backend\.venv\Scripts\Activate.ps1`, then `pip install -r backend\requirements-app.txt`, then `yarn install` in `frontend\`.
+On Windows: `.\backend\.venv\Scripts\Activate.ps1`, then `pip install -r backend\requirements-app.txt`, then `yarn install` in `frontend\`. The encrypted DB file is preserved across upgrades — no migration needed (schema is idempotent at startup).
 
 ---
 
 ## Default credentials
 
-`admin@example.com` / `admin123` — change in `backend/.env` (`ADMIN_PASSWORD`) and restart the backend. The admin record is updated automatically on startup.
+`admin@example.com` / `admin123` — change in `backend/.env` (`ADMIN_PASSWORD`) and restart the backend. The admin record is updated automatically.

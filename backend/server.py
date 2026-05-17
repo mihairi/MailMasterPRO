@@ -1,4 +1,4 @@
-"""Mass Mailing / Mail Merge backend."""
+"""MailMaster PRO backend — SQLite/SQLCipher edition."""
 from dotenv import load_dotenv
 from pathlib import Path
 ROOT_DIR = Path(__file__).parent
@@ -15,12 +15,11 @@ import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Response, BackgroundTasks, Header
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Response, Header
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr
 
+import database as db
 from auth import (
     hash_password, verify_password,
     create_access_token, create_refresh_token, decode_token,
@@ -29,11 +28,7 @@ from auth import (
 from doc_service import parse_excel, replace_placeholders_text, build_personalized_pdf
 from email_service import send_email
 
-# ----------------- DB & app -----------------
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
-
+# ----------------- app -----------------
 app = FastAPI(title="MailMaster PRO API")
 api = APIRouter(prefix="/api")
 
@@ -48,7 +43,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("mailmaster-pro")
 
 
-# ----------------- Helpers -----------------
+# ----------------- helpers -----------------
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -62,7 +57,7 @@ def _set_auth_cookies(resp: Response, access: str, refresh: str):
     resp.set_cookie("refresh_token", refresh, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
 
 
-# ----------------- Models -----------------
+# ----------------- Pydantic models -----------------
 class LoginInput(BaseModel):
     email: EmailStr
     password: str
@@ -84,7 +79,7 @@ class EmailTemplateInput(BaseModel):
 class SendCampaignExternalInput(BaseModel):
     template_id: str
     word_template_id: Optional[str] = None
-    recipients: List[Dict[str, Any]]  # each dict: {email, password?, ...fields}
+    recipients: List[Dict[str, Any]]
 
 
 class ApiKeyCreateInput(BaseModel):
@@ -94,7 +89,7 @@ class ApiKeyCreateInput(BaseModel):
 # ----------------- Auth -----------------
 @api.post("/auth/login")
 async def login(payload: LoginInput, response: Response):
-    user = await db.users.find_one({"email": payload.email.lower()}, {"_id": 0})
+    user = db.fetch_one("SELECT * FROM users WHERE email = ?", (payload.email.lower(),))
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     access = create_access_token(user["id"], user["email"], user["role"])
@@ -127,7 +122,7 @@ async def refresh(request: Request, response: Response):
             raise HTTPException(status_code=401, detail="Invalid token type")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    user = db.fetch_one("SELECT id, email, role FROM users WHERE id = ?", (payload["sub"],))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     access = create_access_token(user["id"], user["email"], user["role"])
@@ -138,18 +133,17 @@ async def refresh(request: Request, response: Response):
 # ----------------- Users (admin) -----------------
 @api.get("/users")
 async def list_users(_admin=Depends(require_admin)):
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
-    return users
+    return db.fetch_all("SELECT id, email, name, role, created_at FROM users ORDER BY created_at DESC")
 
 
 @api.post("/users")
 async def create_user(payload: CreateUserInput, _admin=Depends(require_admin)):
-    existing = await db.users.find_one({"email": payload.email.lower()})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already exists")
     if payload.role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="Invalid role")
-    user_doc = {
+    existing = db.fetch_one("SELECT id FROM users WHERE email = ?", (payload.email.lower(),))
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already exists")
+    user = {
         "id": gen_id(),
         "email": payload.email.lower(),
         "name": payload.name or payload.email.split("@")[0],
@@ -157,85 +151,86 @@ async def create_user(payload: CreateUserInput, _admin=Depends(require_admin)):
         "password_hash": hash_password(payload.password),
         "created_at": now_iso(),
     }
-    await db.users.insert_one(user_doc)
-    user_doc.pop("password_hash", None)
-    user_doc.pop("_id", None)
-    return user_doc
+    db.execute(
+        "INSERT INTO users (id, email, name, role, password_hash, created_at) VALUES (?,?,?,?,?,?)",
+        (user["id"], user["email"], user["name"], user["role"], user["password_hash"], user["created_at"]),
+    )
+    user.pop("password_hash", None)
+    return user
 
 
 @api.delete("/users/{user_id}")
 async def delete_user(user_id: str, admin=Depends(require_admin)):
     if admin["id"] == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    res = await db.users.delete_one({"id": user_id})
-    if res.deleted_count == 0:
+    existing = db.fetch_one("SELECT id FROM users WHERE id = ?", (user_id,))
+    if not existing:
         raise HTTPException(status_code=404, detail="User not found")
+    db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     return {"ok": True}
 
 
 # ----------------- Email Templates -----------------
 @api.get("/email-templates")
 async def list_email_templates(_user=Depends(get_current_user)):
-    items = await db.email_templates.find({}, {"_id": 0}).to_list(1000)
-    return items
+    return db.fetch_all("SELECT * FROM email_templates ORDER BY updated_at DESC")
 
 
 @api.post("/email-templates")
 async def create_email_template(payload: EmailTemplateInput, user=Depends(get_current_user)):
-    doc = {
+    now = now_iso()
+    item = {
         "id": gen_id(),
         "name": payload.name,
         "subject": payload.subject,
         "body_html": payload.body_html,
         "created_by": user["email"],
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
+        "created_at": now,
+        "updated_at": now,
     }
-    await db.email_templates.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    db.execute(
+        "INSERT INTO email_templates (id, name, subject, body_html, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+        (item["id"], item["name"], item["subject"], item["body_html"], item["created_by"], item["created_at"], item["updated_at"]),
+    )
+    return item
 
 
 @api.put("/email-templates/{tid}")
 async def update_email_template(tid: str, payload: EmailTemplateInput, _user=Depends(get_current_user)):
-    res = await db.email_templates.update_one(
-        {"id": tid},
-        {"$set": {**payload.model_dump(), "updated_at": now_iso()}},
-    )
-    if res.matched_count == 0:
+    existing = db.fetch_one("SELECT id FROM email_templates WHERE id = ?", (tid,))
+    if not existing:
         raise HTTPException(status_code=404, detail="Not found")
-    item = await db.email_templates.find_one({"id": tid}, {"_id": 0})
-    return item
+    db.execute(
+        "UPDATE email_templates SET name=?, subject=?, body_html=?, updated_at=? WHERE id=?",
+        (payload.name, payload.subject, payload.body_html, now_iso(), tid),
+    )
+    return db.fetch_one("SELECT * FROM email_templates WHERE id = ?", (tid,))
 
 
 @api.delete("/email-templates/{tid}")
 async def delete_email_template(tid: str, _user=Depends(get_current_user)):
-    res = await db.email_templates.delete_one({"id": tid})
-    if res.deleted_count == 0:
+    existing = db.fetch_one("SELECT id FROM email_templates WHERE id = ?", (tid,))
+    if not existing:
         raise HTTPException(status_code=404, detail="Not found")
+    db.execute("DELETE FROM email_templates WHERE id = ?", (tid,))
     return {"ok": True}
 
 
 # ----------------- Word Templates -----------------
 @api.get("/word-templates")
 async def list_word_templates(_user=Depends(get_current_user)):
-    items = await db.word_templates.find({}, {"_id": 0}).to_list(1000)
-    return items
+    return db.fetch_all("SELECT id, name, original_filename, stored_path, uploaded_by, created_at FROM word_templates ORDER BY created_at DESC")
 
 
 @api.post("/word-templates")
-async def upload_word_template(
-    name: str = Form(...),
-    file: UploadFile = File(...),
-    user=Depends(get_current_user),
-):
+async def upload_word_template(name: str = Form(...), file: UploadFile = File(...), user=Depends(get_current_user)):
     if not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only .docx files are allowed")
     file_id = gen_id()
     stored_path = WORD_TEMPLATES_DIR / f"{file_id}.docx"
     with open(stored_path, "wb") as out:
         shutil.copyfileobj(file.file, out)
-    doc = {
+    item = {
         "id": file_id,
         "name": name,
         "original_filename": file.filename,
@@ -243,31 +238,32 @@ async def upload_word_template(
         "uploaded_by": user["email"],
         "created_at": now_iso(),
     }
-    await db.word_templates.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    db.execute(
+        "INSERT INTO word_templates (id, name, original_filename, stored_path, uploaded_by, created_at) VALUES (?,?,?,?,?,?)",
+        (item["id"], item["name"], item["original_filename"], item["stored_path"], item["uploaded_by"], item["created_at"]),
+    )
+    return item
 
 
 @api.delete("/word-templates/{tid}")
 async def delete_word_template(tid: str, _user=Depends(get_current_user)):
-    item = await db.word_templates.find_one({"id": tid})
+    item = db.fetch_one("SELECT stored_path FROM word_templates WHERE id = ?", (tid,))
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
     try:
         os.remove(item["stored_path"])
     except OSError:
         pass
-    await db.word_templates.delete_one({"id": tid})
+    db.execute("DELETE FROM word_templates WHERE id = ?", (tid,))
     return {"ok": True}
 
 
-# ----------------- Excel parse (preview) -----------------
+# ----------------- Excel parse -----------------
 @api.post("/excel/parse")
 async def parse_excel_endpoint(file: UploadFile = File(...), _user=Depends(get_current_user)):
     if not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="Only .xlsx files are allowed")
-    suffix = ".xlsx"
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=str(UPLOADS_DIR))
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", dir=str(UPLOADS_DIR))
     try:
         shutil.copyfileobj(file.file, tmp)
         tmp.close()
@@ -280,32 +276,15 @@ async def parse_excel_endpoint(file: UploadFile = File(...), _user=Depends(get_c
             pass
 
 
-# ----------------- Logging helper -----------------
-async def _log_send(
-    user_email: str,
-    recipient: str,
-    subject: str,
-    attachment_name: Optional[str],
-    status: str,
-    error: Optional[str] = None,
-    source: str = "ui",
-    campaign_id: Optional[str] = None,
-):
-    await db.send_logs.insert_one({
-        "id": gen_id(),
-        "user_email": user_email,
-        "recipient": recipient,
-        "subject": subject,
-        "attachment_name": attachment_name,
-        "status": status,
-        "error": error,
-        "source": source,
-        "campaign_id": campaign_id,
-        "timestamp": now_iso(),
-    })
+# ----------------- send log helper -----------------
+def _log_send_sync(user_email, recipient, subject, attachment_name, status, error=None, source="ui", campaign_id=None):
+    db.execute(
+        "INSERT INTO send_logs (id, user_email, recipient, subject, attachment_name, status, error, source, campaign_id, timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (gen_id(), user_email, recipient, subject, attachment_name, status, error, source, campaign_id, now_iso()),
+    )
 
 
-# ----------------- Send Campaign (UI) -----------------
+# ----------------- Send campaign (UI) -----------------
 @api.post("/campaigns/send")
 async def send_campaign(
     subject: str = Form(...),
@@ -315,14 +294,13 @@ async def send_campaign(
     attachment_basename: str = Form("document"),
     user=Depends(get_current_user),
 ):
-    # Save excel temporarily and parse
     tmp_xlsx = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", dir=str(UPLOADS_DIR))
     shutil.copyfileobj(excel.file, tmp_xlsx)
     tmp_xlsx.close()
 
     word_template_path = None
     if word_template_id:
-        w = await db.word_templates.find_one({"id": word_template_id})
+        w = db.fetch_one("SELECT stored_path FROM word_templates WHERE id = ?", (word_template_id,))
         if not w:
             os.remove(tmp_xlsx.name)
             raise HTTPException(status_code=404, detail="Word template not found")
@@ -341,8 +319,7 @@ async def send_campaign(
     email_field = headers[0]
     password_field = headers[1]
     campaign_id = gen_id()
-    successes = 0
-    failures = 0
+    successes = failures = 0
     failure_details: List[Dict[str, str]] = []
 
     workdir = tempfile.mkdtemp(dir=str(UPLOADS_DIR))
@@ -363,18 +340,15 @@ async def send_campaign(
                         build_personalized_pdf, word_template_path, row, password or None, workdir, out_name
                     )
                     attachment_filename = f"{attachment_basename}.pdf"
-                await asyncio.to_thread(
-                    send_email, recipient, personalized_subject, personalized_body,
-                    attachment_path, attachment_filename,
-                )
+                await asyncio.to_thread(send_email, recipient, personalized_subject, personalized_body, attachment_path, attachment_filename)
                 successes += 1
-                await _log_send(user["email"], recipient, personalized_subject, attachment_filename, "sent", None, "ui", campaign_id)
+                await asyncio.to_thread(_log_send_sync, user["email"], recipient, personalized_subject, attachment_filename, "sent", None, "ui", campaign_id)
             except Exception as e:
                 failures += 1
                 err = f"{type(e).__name__}: {e}"
                 failure_details.append({"recipient": recipient, "error": err})
                 logger.error("Send failed for %s: %s\n%s", recipient, err, traceback.format_exc())
-                await _log_send(user["email"], recipient, personalized_subject, attachment_filename, "failed", err, "ui", campaign_id)
+                await asyncio.to_thread(_log_send_sync, user["email"], recipient, personalized_subject, attachment_filename, "failed", err, "ui", campaign_id)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         try:
@@ -382,81 +356,76 @@ async def send_campaign(
         except OSError:
             pass
 
-    return {
-        "campaign_id": campaign_id,
-        "total": successes + failures,
-        "sent": successes,
-        "failed": failures,
-        "failures": failure_details,
-    }
+    return {"campaign_id": campaign_id, "total": successes + failures, "sent": successes, "failed": failures, "failures": failure_details}
 
 
 # ----------------- Logs -----------------
 @api.get("/logs")
 async def get_logs(limit: int = 200, user=Depends(get_current_user)):
-    query = {} if user["role"] == "admin" else {"user_email": user["email"]}
-    items = await db.send_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
-    return items
+    if user["role"] == "admin":
+        return db.fetch_all("SELECT * FROM send_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
+    return db.fetch_all("SELECT * FROM send_logs WHERE user_email = ? ORDER BY timestamp DESC LIMIT ?", (user["email"], limit))
 
 
-# ----------------- API Keys -----------------
+# ----------------- API Keys (admin) -----------------
 @api.get("/api-keys")
 async def list_api_keys(_admin=Depends(require_admin)):
-    items = await db.api_keys.find({}, {"_id": 0, "key_hash": 0}).to_list(200)
-    return items
+    return db.fetch_all("SELECT id, name, owner_email, key_preview, created_at, revoked FROM api_keys ORDER BY created_at DESC")
 
 
 @api.post("/api-keys")
 async def create_api_key(payload: ApiKeyCreateInput, admin=Depends(require_admin)):
     raw = "mk_" + secrets.token_urlsafe(32)
-    doc = {
+    item = {
         "id": gen_id(),
         "name": payload.name,
         "owner_email": admin["email"],
         "key_preview": raw[:10] + "...",
         "key_hash": hash_password(raw),
         "created_at": now_iso(),
-        "revoked": False,
     }
-    await db.api_keys.insert_one(doc)
-    return {"id": doc["id"], "name": doc["name"], "key": raw, "created_at": doc["created_at"]}
+    db.execute(
+        "INSERT INTO api_keys (id, name, owner_email, key_preview, key_hash, created_at, revoked) VALUES (?,?,?,?,?,?,0)",
+        (item["id"], item["name"], item["owner_email"], item["key_preview"], item["key_hash"], item["created_at"]),
+    )
+    return {"id": item["id"], "name": item["name"], "key": raw, "created_at": item["created_at"]}
 
 
 @api.delete("/api-keys/{kid}")
 async def revoke_api_key(kid: str, _admin=Depends(require_admin)):
-    res = await db.api_keys.update_one({"id": kid}, {"$set": {"revoked": True}})
-    if res.matched_count == 0:
+    existing = db.fetch_one("SELECT id FROM api_keys WHERE id = ?", (kid,))
+    if not existing:
         raise HTTPException(status_code=404, detail="Not found")
+    db.execute("UPDATE api_keys SET revoked = 1 WHERE id = ?", (kid,))
     return {"ok": True}
 
 
-async def _validate_api_key(provided: str) -> dict:
+def _validate_api_key(provided: str) -> dict:
     if not provided:
         raise HTTPException(status_code=401, detail="Missing X-API-Key")
-    keys = await db.api_keys.find({"revoked": False}).to_list(1000)
+    keys = db.fetch_all("SELECT * FROM api_keys WHERE revoked = 0")
     for k in keys:
         if verify_password(provided, k["key_hash"]):
             return k
     raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-# ----------------- External API (API key) -----------------
+# ----------------- External API -----------------
 @api.post("/external/send")
 async def external_send(payload: SendCampaignExternalInput, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
-    key_doc = await _validate_api_key(x_api_key or "")
-    template = await db.email_templates.find_one({"id": payload.template_id}, {"_id": 0})
+    key_doc = await asyncio.to_thread(_validate_api_key, x_api_key or "")
+    template = db.fetch_one("SELECT subject, body_html FROM email_templates WHERE id = ?", (payload.template_id,))
     if not template:
         raise HTTPException(status_code=404, detail="Email template not found")
     word_template_path = None
     if payload.word_template_id:
-        w = await db.word_templates.find_one({"id": payload.word_template_id})
+        w = db.fetch_one("SELECT stored_path FROM word_templates WHERE id = ?", (payload.word_template_id,))
         if not w:
             raise HTTPException(status_code=404, detail="Word template not found")
         word_template_path = w["stored_path"]
 
     campaign_id = gen_id()
-    successes = 0
-    failures = 0
+    successes = failures = 0
     failure_details = []
     workdir = tempfile.mkdtemp(dir=str(UPLOADS_DIR))
     try:
@@ -477,51 +446,44 @@ async def external_send(payload: SendCampaignExternalInput, x_api_key: Optional[
                         build_personalized_pdf, word_template_path, data, password or None, workdir, out_name
                     )
                     attachment_filename = "document.pdf"
-                await asyncio.to_thread(
-                    send_email, recipient, personalized_subject, personalized_body,
-                    attachment_path, attachment_filename,
-                )
+                await asyncio.to_thread(send_email, recipient, personalized_subject, personalized_body, attachment_path, attachment_filename)
                 successes += 1
-                await _log_send(key_doc["owner_email"], recipient, personalized_subject, attachment_filename, "sent", None, "api", campaign_id)
+                await asyncio.to_thread(_log_send_sync, key_doc["owner_email"], recipient, personalized_subject, attachment_filename, "sent", None, "api", campaign_id)
             except Exception as e:
                 failures += 1
                 err = f"{type(e).__name__}: {e}"
                 failure_details.append({"recipient": recipient, "error": err})
-                await _log_send(key_doc["owner_email"], recipient, personalized_subject, attachment_filename, "failed", err, "api", campaign_id)
+                await asyncio.to_thread(_log_send_sync, key_doc["owner_email"], recipient, personalized_subject, attachment_filename, "failed", err, "api", campaign_id)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
-    return {
-        "campaign_id": campaign_id,
-        "total": successes + failures,
-        "sent": successes,
-        "failed": failures,
-        "failures": failure_details,
-    }
+    return {"campaign_id": campaign_id, "total": successes + failures, "sent": successes, "failed": failures, "failures": failure_details}
 
 
 # ----------------- Dashboard stats -----------------
 @api.get("/stats")
 async def stats(user=Depends(get_current_user)):
-    q = {} if user["role"] == "admin" else {"user_email": user["email"]}
-    total = await db.send_logs.count_documents(q)
-    sent = await db.send_logs.count_documents({**q, "status": "sent"})
-    failed = await db.send_logs.count_documents({**q, "status": "failed"})
-    templates = await db.email_templates.count_documents({})
-    word_templates = await db.word_templates.count_documents({})
+    if user["role"] == "admin":
+        total = db.count("SELECT COUNT(*) FROM send_logs")
+        sent = db.count("SELECT COUNT(*) FROM send_logs WHERE status = 'sent'")
+        failed = db.count("SELECT COUNT(*) FROM send_logs WHERE status = 'failed'")
+    else:
+        total = db.count("SELECT COUNT(*) FROM send_logs WHERE user_email = ?", (user["email"],))
+        sent = db.count("SELECT COUNT(*) FROM send_logs WHERE user_email = ? AND status = 'sent'", (user["email"],))
+        failed = db.count("SELECT COUNT(*) FROM send_logs WHERE user_email = ? AND status = 'failed'", (user["email"],))
     return {
         "total_emails": total,
         "sent": sent,
         "failed": failed,
         "success_rate": (sent / total * 100.0) if total else 0.0,
-        "email_templates": templates,
-        "word_templates": word_templates,
+        "email_templates": db.count("SELECT COUNT(*) FROM email_templates"),
+        "word_templates": db.count("SELECT COUNT(*) FROM word_templates"),
     }
 
 
 @api.get("/")
 async def root():
-    return {"service": "mailmaster-pro", "status": "ok"}
+    return {"service": "mailmaster-pro", "status": "ok", "storage": "sqlite+sqlcipher"}
 
 
 # ----------------- App wiring -----------------
@@ -539,32 +501,17 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def on_startup():
-    # Indexes
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("id", unique=True)
-    await db.email_templates.create_index("id", unique=True)
-    await db.word_templates.create_index("id", unique=True)
-    await db.api_keys.create_index("id", unique=True)
-    await db.send_logs.create_index("timestamp")
-
-    # Seed admin
+    db.init_schema()
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
-    existing = await db.users.find_one({"email": admin_email})
+    existing = db.fetch_one("SELECT * FROM users WHERE email = ?", (admin_email,))
     if not existing:
-        await db.users.insert_one({
-            "id": gen_id(),
-            "email": admin_email,
-            "name": "Admin",
-            "role": "admin",
-            "password_hash": hash_password(admin_password),
-            "created_at": now_iso(),
-        })
+        db.execute(
+            "INSERT INTO users (id, email, name, role, password_hash, created_at) VALUES (?,?,?,?,?,?)",
+            (gen_id(), admin_email, "Admin", "admin", hash_password(admin_password), now_iso()),
+        )
         logger.info("Seeded admin user: %s", admin_email)
     elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    client.close()
+        db.execute("UPDATE users SET password_hash = ? WHERE email = ?", (hash_password(admin_password), admin_email))
+        logger.info("Updated admin password from env")
+    logger.info("Database: %s", os.environ.get("DB_PATH", "data/mailmaster.db"))

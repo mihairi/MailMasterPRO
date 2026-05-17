@@ -6,6 +6,8 @@ from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException, Request, Depends
 from typing import Optional
 
+import database as db
+
 JWT_ALGORITHM = "HS256"
 
 
@@ -60,7 +62,6 @@ def _extract_token(request: Request) -> Optional[str]:
 
 
 async def get_current_user(request: Request) -> dict:
-    from server import db  # avoid circular at import time
     token = _extract_token(request)
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -68,7 +69,10 @@ async def get_current_user(request: Request) -> dict:
         payload = decode_token(token)
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Invalid token type")
-        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+        user = db.fetch_one(
+            "SELECT id, email, name, role, created_at FROM users WHERE id = ?",
+            (payload["sub"],),
+        )
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user

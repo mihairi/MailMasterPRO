@@ -9,11 +9,11 @@ Mass mailing application with mail merge: send personalized individual emails vi
 - **External integrator**: Uses API key to programmatically trigger campaigns from saved templates.
 
 ## Architecture
-- Backend: FastAPI + Motor (MongoDB), modular files (`server.py`, `auth.py`, `doc_service.py`, `email_service.py`).
-- Frontend: React (CRA) + Tailwind + Phosphor icons, custom WYSIWYG `RichTextEditor`.
+- Backend: FastAPI + **SQLite/SQLCipher** (single AES-256 encrypted file at `backend/data/mailmaster.db`). No MongoDB or other DB server.
+- Frontend: React (CRA) + Tailwind + Phosphor icons, custom WYSIWYG `RichTextEditor` with image-resize controls.
 - PDF pipeline: `python-docx` placeholder replacement → LibreOffice headless (`soffice --convert-to pdf`) → `pikepdf` AES-256 encryption when password provided.
 - Auth: JWT (httpOnly cookies + Authorization Bearer fallback), bcrypt password hashing.
-- External API: bcrypt-hashed API keys stored in MongoDB; `X-API-Key` header.
+- External API: bcrypt-hashed API keys (admin-only management); `X-API-Key` header.
 
 ## Implemented (May 13, 2026)
 - ✅ JWT auth (login, me, refresh, logout) with admin seed

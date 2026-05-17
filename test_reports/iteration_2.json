@@ -1,0 +1,41 @@
+{
+  "summary": "Backend regression after MongoDB -> SQLite+SQLCipher migration. 23/23 pytest tests pass against the public REACT_APP_BACKEND_URL. Verified: (1) /api/auth/login returns user + access_token and sets httpOnly access_token/refresh_token cookies; (2) /api/auth/me with Bearer returns {id,email,name,role,created_at} and never leaks password_hash; (3) /api/auth/logout no longer requires auth (clears cookies regardless); (4) /api/users admin-only, non-admin gets 403 on GET/POST/DELETE; (5) email-templates CRUD; (6) word-templates upload(.docx)/list/delete + reject non-docx; (7) /api/excel/parse returns headers+rows; (8) /api/campaigns/send returns campaign_id + total/sent/failed with send_logs written (status=failed, source=ui) since SMTP smtp.example.com is unreachable as intended; (9) /api/logs ordered desc; (10) /api/api-keys is now ADMIN-ONLY (non-admin gets 403 on GET/POST/DELETE) — raw key returned once on create, only preview on list; (11) /api/external/send returns 401 for missing/wrong/revoked X-API-Key and writes logs with source=api on valid key; (12) /api/stats returns totals + email_templates + word_templates counts; (13) DB file /app/backend/data/mailmaster.db exists, header is NOT 'SQLite format 3' (random encrypted bytes), and stdlib sqlite3 raises DatabaseError('file is not a database') when opening without the key — confirming SQLCipher AES-256 at rest.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/users", "issue": "Password has no minimum length validation; accepts very short passwords like 'x'. Recommend Pydantic constr(min_length=6)."},
+      {"endpoint": "POST /api/external/send", "issue": "_validate_api_key iterates all non-revoked keys and bcrypt-verifies each — O(N) per request. Add a deterministic lookup hash (SHA256/HMAC of raw key) stored alongside, lookup by that, then bcrypt-verify only the matched row."},
+      {"endpoint": "PRAGMA journal_mode=WAL with SQLCipher", "issue": "Per connection-open path, WAL is fine but produces -wal/-shm sidecar files in /app/backend/data/. Those sidecars are ALSO encrypted by SQLCipher but worth noting for backups."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Add password min-length validation on POST /api/users.",
+    "(Optional) Optimize API key validation with an O(1) lookup hash; currently bcrypts every key per request.",
+    "(Optional) Restrict CORS allow_origins='*' in combination with allow_credentials=True; some browsers will reject credentialed requests. Use explicit origins.",
+    "(Optional) Add rate limiting / brute-force lockout on /api/auth/login (playbook recommends 5-failure lockout)."
+  ],
+  "critical_code_review_comments": [
+    "database.py uses one new connection per operation (open + PRAGMA key + PRAGMA journal_mode + foreign_keys) — fine for low traffic but heavy under load. Consider a connection pool or a long-lived per-thread connection.",
+    "auth.py decode_token catches no expiry path before InvalidTokenError; current handling is correct because ExpiredSignatureError is caught explicitly, but the order matters — keep as is.",
+    "server.py is 518 lines after migration; manageable but consider splitting into routers (auth/users/templates/campaigns/api_keys) as it grows.",
+    "CORS allow_origins='*' with allow_credentials=True is permitted by Starlette but is risky in production.",
+    "bcrypt format verified: hash_password produces $2b$ prefixed hashes (still correct after migration).",
+    "send_email failures correctly do not abort the campaign; per-recipient try/except writes proper failed entries to send_logs with source.",
+    "Migration is clean: all CRUD endpoints return UUID string ids, no MongoDB _id leakage in any response."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "N/A (not tested per request)"},
+  "test_credentials": "admin@example.com / admin123 (seeded on startup if missing; updated automatically if env password differs)",
+  "seed_data_creation": "Tests create TEST_-prefixed users, email templates, word templates, and API keys and clean them up at teardown. SMTP-fail send_logs from campaign tests remain (intentional — reviewer can inspect via /api/logs).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Storage migrated to SQLite+SQLCipher; DB at /app/backend/data/mailmaster.db is AES-encrypted (verified: stdlib sqlite3 cannot open it). All 23 tests pass. SMTP intentionally unreachable (smtp.example.com) so all live sends fail — endpoints still return 200 with campaign_id + failed counters and write send_logs. LibreOffice (soffice) is NOT installed in this pod, so PDF generation also fails internally, but campaign endpoints still return success structure with failed logs. If LibreOffice gets installed, the attachment_name='invoice.pdf' will start appearing in send_logs for word-template campaigns.",
+  "rca of the issue": "N/A — no critical issues. Storage migration is successful: SQLCipher encryption-at-rest verified at byte level and via stdlib sqlite3 failure to open without key."
+}
