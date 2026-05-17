@@ -104,3 +104,12 @@ body {
   background: hsl(224 100% 33%);
   color: white;
 }
+
+/* Suppress any injected "Made with Emergent" badge */
+#emergent-badge,
+a[href*="emergent.sh"][id*="badge"],
+a[href*="utm_source=emergent-badge"] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
