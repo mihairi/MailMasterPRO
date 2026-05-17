@@ -171,6 +171,18 @@ SMTP_PASS="your-smtp-password-or-app-password"
 SMTP_FROM="you@your-domain.com"
 SMTP_FROM_NAME="MailMaster PRO"
 SMTP_USE_TLS="true"
+SMTP_REPLY_TO=""                # optional Reply-To header
+SMTP_LIST_UNSUBSCRIBE=""        # optional List-Unsubscribe (e.g. <mailto:unsub@you.com>)
+
+# --- Anti-blocking throttle (defaults; per-campaign overridable from UI) ---
+MAX_PER_MINUTE="20"             # global rate cap
+MAX_PER_HOUR="300"
+MAX_PER_DAY="2000"              # persistent daily quota (UTC)
+MAX_PER_DOMAIN_PER_MIN="5"      # same-domain throttle (Gmail/Outlook friendly)
+DELAY_MIN_MS="800"              # random jitter between sends
+DELAY_MAX_MS="2500"
+RETRY_ATTEMPTS="3"              # transient SMTP retries
+RETRY_BACKOFF_SECONDS="5"       # exponential backoff base
 ```
 
 > **Double-quote every value**. Special characters like `$`, `#`, `!` won't get shell-expanded.
@@ -199,6 +211,50 @@ For production, set `REACT_APP_BACKEND_URL` to your public backend URL **before*
 | Local Postfix | `localhost` | 25 | false | (empty) | (empty) |
 
 Port `465` → set `SMTP_USE_TLS="false"` (SSL, not STARTTLS).
+
+---
+
+## Anti-blocking & deliverability
+
+To minimise risk of getting your sending address rate-limited or blocked, MailMaster PRO ships with multiple defences (all configurable in `backend/.env`, overridable per campaign from the Compose UI's **Delivery pacing** panel).
+
+| Mechanism | Default | What it does |
+|---|---|---|
+| `MAX_PER_MINUTE` | 20 | Hard cap of emails per rolling 60 s window |
+| `MAX_PER_HOUR` | 300 | Cap per rolling 60 min window |
+| `MAX_PER_DAY` | 2000 | Persistent UTC-day quota stored in DB (survives restarts) |
+| `MAX_PER_DOMAIN_PER_MIN` | 5 | Cap per recipient domain — critical for Gmail/Outlook |
+| `DELAY_MIN_MS` / `DELAY_MAX_MS` | 800–2500 | Random jitter between sends (not a fixed cadence) |
+| `RETRY_ATTEMPTS` / `RETRY_BACKOFF_SECONDS` | 3 / 5 | Exponential backoff for 4xx transient SMTP errors |
+| SMTP connection reuse | always on | One TLS handshake per campaign — many providers throttle reconnects |
+| `Message-ID`, `Date`, `Reply-To`, `List-Unsubscribe`, `X-Mailer` | always | Standards-compliant headers improve inbox placement |
+
+### Recommended starting values per provider
+
+| Provider | per_minute | per_domain_per_min | Daily cap | Notes |
+|---|---|---|---|---|
+| **Gmail (free)** | 8 | 3 | ~500 | Personal Gmail caps you at ~500/day total. SMTP often graylists bursts. |
+| **Google Workspace** | 15 | 5 | 2000 | Workspace per-user daily limit. |
+| **Outlook / 365** | 10 | 3 | ~10000 | Microsoft will silently throttle if you exceed ~30/min. |
+| **SendGrid free** | 20 | 10 | ~100 | Free tier limit; paid tiers much higher. |
+| **Amazon SES (sandbox)** | 1 | 1 | 200 | Sandbox is intentionally tiny. Request production access. |
+| **Self-hosted Postfix** | 60+ | 20+ | unlimited | Limited only by your IP reputation. |
+
+> Per-domain throttling matters most. Sending 100 emails to 100 different domains in 60 s is usually fine; sending 100 emails to `*@gmail.com` in 60 s is almost guaranteed to trigger blocks.
+
+### Daily quota behaviour
+
+When `MAX_PER_DAY` is reached the throttler sleeps until the next UTC midnight and resumes automatically. This counter is stored in the `daily_quota` table inside the encrypted DB — it survives restarts.
+
+### `Reply-To` / `List-Unsubscribe`
+
+For transactional emails leave both blank.
+For marketing/bulk mail, set:
+```dotenv
+SMTP_REPLY_TO="you@your-domain.com"
+SMTP_LIST_UNSUBSCRIBE="<mailto:unsubscribe@your-domain.com>, <https://your-domain.com/unsubscribe>"
+```
+This is required by Google/Yahoo bulk-sender rules (2024+) and meaningfully improves deliverability.
 
 ---
 

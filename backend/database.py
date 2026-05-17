@@ -157,5 +157,10 @@ def init_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_send_logs_ts        ON send_logs(timestamp);
         CREATE INDEX IF NOT EXISTS idx_send_logs_user      ON send_logs(user_email);
         CREATE INDEX IF NOT EXISTS idx_send_logs_campaign  ON send_logs(campaign_id);
+
+        CREATE TABLE IF NOT EXISTS daily_quota (
+            day   TEXT PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0
+        );
         """)
     _initialized = True

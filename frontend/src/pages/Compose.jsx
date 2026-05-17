@@ -3,7 +3,7 @@ import api, { formatApiErrorDetail } from "@/lib/api";
 import RichTextEditor from "@/components/RichTextEditor";
 import PreviewPanel from "@/components/PreviewPanel";
 import { Header } from "@/pages/Dashboard";
-import { UploadSimple, Trash, PaperPlaneTilt, CheckCircle, Warning, FloppyDisk, Eye, EyeSlash } from "@phosphor-icons/react";
+import { UploadSimple, Trash, PaperPlaneTilt, CheckCircle, Warning, FloppyDisk, Eye, EyeSlash, Gauge } from "@phosphor-icons/react";
 
 export default function Compose() {
   const [subject, setSubject] = useState("");
@@ -20,11 +20,32 @@ export default function Compose() {
   const [error, setError] = useState("");
   const [saveName, setSaveName] = useState("");
   const [showPreview, setShowPreview] = useState(true);
+
+  // --- Throttle / anti-blocking settings ---
+  const [throttleDefaults, setThrottleDefaults] = useState(null);
+  const [showThrottle, setShowThrottle] = useState(false);
+  const [overrideThrottle, setOverrideThrottle] = useState(false);
+  const [perMinute, setPerMinute] = useState("");
+  const [perHour, setPerHour] = useState("");
+  const [perDay, setPerDay] = useState("");
+  const [perDomainPerMin, setPerDomainPerMin] = useState("");
+  const [delayMinMs, setDelayMinMs] = useState("");
+  const [delayMaxMs, setDelayMaxMs] = useState("");
+
   const xlsxRef = useRef(null);
 
   const reload = () => {
     api.get("/word-templates").then((r) => setWordTemplates(r.data)).catch(() => {});
     api.get("/email-templates").then((r) => setEmailTemplates(r.data)).catch(() => {});
+    api.get("/throttle/defaults").then((r) => {
+      setThrottleDefaults(r.data);
+      setPerMinute(String(r.data.per_minute));
+      setPerHour(String(r.data.per_hour));
+      setPerDay(String(r.data.per_day));
+      setPerDomainPerMin(String(r.data.per_domain_per_min));
+      setDelayMinMs(String(r.data.delay_min_ms));
+      setDelayMaxMs(String(r.data.delay_max_ms));
+    }).catch(() => {});
   };
   useEffect(() => { reload(); }, []);
 
@@ -81,6 +102,14 @@ export default function Compose() {
     fd.append("excel", excelFile);
     if (wordTemplateId) fd.append("word_template_id", wordTemplateId);
     fd.append("attachment_basename", attachmentBasename || "document");
+    if (overrideThrottle) {
+      if (perMinute)        fd.append("per_minute", perMinute);
+      if (perHour)          fd.append("per_hour", perHour);
+      if (perDay)           fd.append("per_day", perDay);
+      if (perDomainPerMin)  fd.append("per_domain_per_min", perDomainPerMin);
+      if (delayMinMs)       fd.append("delay_min_ms", delayMinMs);
+      if (delayMaxMs)       fd.append("delay_max_ms", delayMaxMs);
+    }
     setSending(true);
     try {
       const { data } = await api.post("/campaigns/send", fd, { timeout: 600000 });
@@ -216,6 +245,56 @@ export default function Compose() {
             </button>
           </div>
 
+          {/* Throttle / Anti-blocking */}
+          <div className="border border-[#E2E8F0] bg-white">
+            <button
+              type="button"
+              onClick={() => setShowThrottle((s) => !s)}
+              data-testid="toggle-throttle-button"
+              className="w-full flex items-center justify-between px-4 py-3 bg-[#F8F9FA] border-b border-[#E2E8F0] text-left"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                <Gauge size={16} /> Delivery pacing
+                <span className="text-[10px] uppercase tracking-[0.2em] text-[#9CA3AF] ml-2">
+                  Anti-blocking
+                </span>
+              </span>
+              <span className="text-xs text-[#4B5563] font-mono">
+                {throttleDefaults && (
+                  <>
+                    {overrideThrottle ? perMinute : throttleDefaults.per_minute}/min ·{" "}
+                    {overrideThrottle ? perHour : throttleDefaults.per_hour}/hr ·{" "}
+                    today {throttleDefaults.today_sent}/{overrideThrottle ? perDay : throttleDefaults.per_day}
+                  </>
+                )}
+              </span>
+            </button>
+            {showThrottle && (
+              <div className="p-4 space-y-3" data-testid="throttle-panel">
+                <label className="flex items-center gap-2 text-sm text-[#111827]">
+                  <input
+                    type="checkbox"
+                    checked={overrideThrottle}
+                    onChange={(e) => setOverrideThrottle(e.target.checked)}
+                    data-testid="throttle-override-checkbox"
+                  />
+                  Override default limits for this campaign
+                </label>
+                <div className={`grid sm:grid-cols-3 gap-3 ${overrideThrottle ? "" : "opacity-50 pointer-events-none"}`}>
+                  <NumField label="Emails / minute" value={perMinute} onChange={setPerMinute} testid="throttle-per-minute" />
+                  <NumField label="Emails / hour"   value={perHour}   onChange={setPerHour}   testid="throttle-per-hour" />
+                  <NumField label="Emails / day"    value={perDay}    onChange={setPerDay}    testid="throttle-per-day" />
+                  <NumField label="Same-domain / min" value={perDomainPerMin} onChange={setPerDomainPerMin} testid="throttle-per-domain" />
+                  <NumField label="Min delay (ms)"  value={delayMinMs} onChange={setDelayMinMs} testid="throttle-delay-min" />
+                  <NumField label="Max delay (ms)"  value={delayMaxMs} onChange={setDelayMaxMs} testid="throttle-delay-max" />
+                </div>
+                <div className="text-[11px] text-[#4B5563] font-mono border-t border-[#E2E8F0] pt-2">
+                  Tip: aggressive limits (≥30/min to the same domain) often trigger graylisting on Gmail / Outlook. Keep delay jitter on to look natural.
+                </div>
+              </div>
+            )}
+          </div>
+
           {error && (
             <div className="text-sm border border-[#E53E3E] bg-red-50 text-[#E53E3E] px-3 py-2 flex items-start gap-2" data-testid="compose-error">
               <Warning size={16} /> {error}
@@ -312,3 +391,20 @@ export default function Compose() {
     </div>
   );
 }
+
+function NumField({ label, value, onChange, testid }) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-[0.2em] text-[#9CA3AF] block mb-1">{label}</label>
+      <input
+        type="number"
+        min="0"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        data-testid={testid}
+        className="w-full border border-[#E2E8F0] bg-white px-3 py-2 text-sm font-mono"
+      />
+    </div>
+  );
+}
+

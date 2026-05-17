@@ -88,6 +88,18 @@ SMTP_PASS=""
 SMTP_FROM=""
 SMTP_FROM_NAME="MailMaster PRO"
 SMTP_USE_TLS="true"
+SMTP_REPLY_TO=""
+SMTP_LIST_UNSUBSCRIBE=""
+
+# --- Anti-blocking throttle (defaults; per-campaign overridable from UI) ---
+MAX_PER_MINUTE="20"
+MAX_PER_HOUR="300"
+MAX_PER_DAY="2000"
+MAX_PER_DOMAIN_PER_MIN="5"
+DELAY_MIN_MS="800"
+DELAY_MAX_MS="2500"
+RETRY_ATTEMPTS="3"
+RETRY_BACKOFF_SECONDS="5"
 "@ | Out-File -FilePath $envBackend -Encoding ascii
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $RootDir "backend\data") | Out-Null

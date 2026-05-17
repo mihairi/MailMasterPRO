@@ -1,0 +1,45 @@
+{
+  "summary": "Tested MailMaster PRO anti-blocking layer. 22/28 pytest tests pass. New /api/throttle/defaults endpoint works correctly and returns the expected 7-field response (per_minute=20, per_hour=300, per_day=2000, per_domain_per_min=5, delay_min_ms=800, delay_max_ms=2500, today_sent=0) — the daily_quota table is verified to exist (otherwise current_daily_count() would raise). Storage encryption regression is intact (SQLCipher header still encrypted, stdlib sqlite3 cannot open). CRITICAL bug found: BOTH /api/campaigns/send and /api/external/send return HTTP 500 instead of HTTP 200 when SMTP is unreachable. Per the review request, these endpoints MUST return 200 with campaign_id + sent=0 + failed=N + 'throttle' echo even when SMTP cannot connect — currently they crash before the per-recipient loop runs. This is the same root cause for all 6 failing tests (3 pre-existing regression tests + 3 new throttle tests).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/campaigns/send and POST /api/external/send",
+        "issue": "HTTP 500 when SMTP unreachable. SMTPSession.__enter__() (i.e. _connect → socket.gethostbyname for smtp.example.com → gaierror) is called at server.py:351 (send_campaign) and server.py:476 (external_send) OUTSIDE any try/except. The connect failure raises and the per-recipient try/except never executes, so no send_logs are written, no campaign_id is returned, and no 'throttle' echo is returned. Per review request: 'All sends will fail at the SMTPSession.connect() step — that is expected. The campaign endpoints should still return 200 with campaign_id, total/sent=0/failed=N, and write log entries.'",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {"endpoint": "throttle.py:_compute_wait_seconds", "issue": "Daily quota wait computes 'next midnight' as 23:59:59 today instead of next-day 00:00 — off by up to 1s, low impact."},
+      {"endpoint": "throttle.py:CampaignThrottler", "issue": "record_send is called only on success (per intent), but failed sends still consume SMTP connection attempts and don't update sliding windows — minute/hour caps don't apply to failures. Documented behaviour, but flag for future ESP rate-limit alignment."},
+      {"endpoint": "POST /api/external/send", "issue": "_validate_api_key still iterates ALL non-revoked keys and bcrypts each — O(N) per request. Carried over from previous iteration."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "FIX (CRITICAL): wrap smtp.__enter__() in try/except in /api/campaigns/send and /api/external/send. On connect failure, the endpoint must still iterate recipients and write 'failed' send_logs for each, return 200 with campaign_id, sent=0, failed=N, and the 'throttle' echo. Easiest patch: move `await asyncio.to_thread(smtp.__enter__)` INTO the per-recipient try/except (or set smtp=None and let smtp.send raise inside the existing try). Affected lines: server.py:350-351 and server.py:475-476.",
+    "After fix, re-run pytest /app/backend/tests/backend_test.py — all 6 failing tests should pass with no further changes."
+  ],
+  "critical_code_review_comments": [
+    "server.py: SMTPSession context-manager entry is fragile — __enter__ does network I/O that can fail synchronously, but the surrounding code treats it as infallible. Per-recipient try/except must envelope connection as well as send.",
+    "throttle.py: ThrottleConfig.as_dict() correctly echoes per-campaign overrides — endpoint contract verified via /api/throttle/defaults.",
+    "throttle.py: daily_quota INSERT … ON CONFLICT(day) DO UPDATE is correct SQLite UPSERT syntax (requires SQLite 3.24+, sqlcipher3 ships ≥3.42, OK).",
+    "database.py: daily_quota table is created in init_schema (verified — /api/throttle/defaults reads today_sent=0 without error).",
+    "email_service.py: SMTPSession.send retry/backoff logic is sound for transient SMTP codes; reconnect on disconnect is correct. Headers (Message-ID, Date, X-Mailer, Reply-To, List-Unsubscribe) are properly added.",
+    "server.py: 'throttle' echo correctly returned in successful path — but never reached when SMTP fails to connect upfront.",
+    "Backend file size: server.py now 581 lines — getting large. Consider splitting into routers (auth/users/templates/campaigns/throttle/api_keys) for maintainability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "78.6% (22/28)", "frontend": "N/A (backend-only test request)"},
+  "test_credentials": "admin@example.com / admin123 (seeded; verified working)",
+  "seed_data_creation": "Tests create and clean up TEST_-prefixed users, email templates, word templates, and API keys. SMTP-fail send_logs accumulate (intended). daily_quota table populated on startup (currently row count=0 since no successful sends).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes the SMTP-connect-failure handling in send_campaign/external_send, re-run `pytest /app/backend/tests/backend_test.py -v`. All 28 tests should pass. The throttle override tests (TestThrottle::test_campaign_send_echoes_throttle_and_runs_fast, test_external_send_echoes_throttle, test_today_sent_unaffected_by_failed_sends) explicitly verify: (1) 'throttle' echo in response, (2) total/sent=0/failed=N for unreachable SMTP, (3) elapsed time <20s with overrides delay_min/max_ms=0+per_minute=1000, (4) today_sent stays 0 because record_send is success-only. /api/throttle/defaults already verified working (returns all 7 fields + correct types).",
+  "rca of the issue": "ROOT CAUSE: In server.py the SMTP connection is opened BEFORE the per-recipient loop, on lines 350-351 (send_campaign) and 475-476 (external_send): `smtp = await asyncio.to_thread(SMTPSession); await asyncio.to_thread(smtp.__enter__)`. The __enter__ call invokes _connect() which performs DNS resolution on SMTP_HOST=smtp.example.com → socket.gaierror[Errno -2]. This exception propagates out of the route handler → FastAPI returns 500. REPRO: POST /api/campaigns/send with any valid form payload → 500 Internal Server Error. MITIGATION: Move smtp.__enter__() inside a try/except that, on failure, marks ALL recipients as failed and writes per-recipient send_logs with the connect error. Alternatively, lazy-connect inside smtp.send (catch in existing per-recipient try). Minimal patch (5 lines): wrap line 351 (and 476) with try/except, set smtp=None on failure, and inside the loop check `if smtp is None: raise last_connect_err` so the existing per-recipient except writes the failed log."
+}

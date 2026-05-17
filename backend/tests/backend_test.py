@@ -247,6 +247,11 @@ class TestCampaignSend:
             "subject": "Hello {name}",
             "body_html": "<p>Hi {name}, INV {invoice_number}</p>",
             "attachment_basename": "doc",
+            # Throttle overrides to keep test fast
+            "per_minute": "10000",
+            "per_domain_per_min": "10000",
+            "delay_min_ms": "0",
+            "delay_max_ms": "0",
         }
         r = requests.post(f"{API}/campaigns/send", data=data, files=files,
                           headers=admin_headers, timeout=120)
@@ -288,6 +293,11 @@ class TestCampaignSend:
                 "body_html": "<p>Hi {name}, INV {invoice_number}</p>",
                 "word_template_id": wid,
                 "attachment_basename": "invoice",
+                # Throttle overrides
+                "per_minute": "10000",
+                "per_domain_per_min": "10000",
+                "delay_min_ms": "0",
+                "delay_max_ms": "0",
             }
             r = requests.post(f"{API}/campaigns/send", data=data, files=files,
                               headers=admin_headers, timeout=300)
@@ -379,6 +389,10 @@ class TestApiKeys:
                                        {"email": "alice@example.com", "name": "Alice", "invoice_number": "INV-1"},
                                        {"email": "bob@example.com", "name": "Bob", "invoice_number": "INV-2"},
                                    ],
+                                   "per_minute": 10000,
+                                   "per_domain_per_min": 10000,
+                                   "delay_min_ms": 0,
+                                   "delay_max_ms": 0,
                                },
                                headers={"X-API-Key": raw}, timeout=120)
             assert r5.status_code == 200, r5.text
@@ -446,3 +460,154 @@ class TestStorageEncryption:
                 conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
         finally:
             conn.close()
+
+
+# ----------------- Throttle / anti-blocking layer -----------------
+import time as _time
+
+
+class TestThrottle:
+    """Anti-blocking layer: defaults endpoint + per-campaign overrides."""
+
+    def test_throttle_defaults_shape(self, admin_headers):
+        r = requests.get(f"{API}/throttle/defaults", headers=admin_headers, timeout=10)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # Must contain all expected fields
+        for k in ("per_minute", "per_hour", "per_day",
+                  "per_domain_per_min", "delay_min_ms", "delay_max_ms",
+                  "today_sent"):
+            assert k in data, f"missing {k} in defaults response: {data}"
+        # Type sanity
+        for k in ("per_minute", "per_hour", "per_day",
+                  "per_domain_per_min", "delay_min_ms", "delay_max_ms",
+                  "today_sent"):
+            assert isinstance(data[k], int), f"{k} should be int, got {type(data[k])}"
+        # delay_max must be >= delay_min
+        assert data["delay_max_ms"] >= data["delay_min_ms"]
+        # today_sent should be a non-negative count
+        assert data["today_sent"] >= 0
+
+    def test_throttle_defaults_requires_auth(self):
+        r = requests.get(f"{API}/throttle/defaults", timeout=10)
+        assert r.status_code == 401
+
+    def test_campaign_send_echoes_throttle_and_runs_fast(self, admin_headers):
+        """delay=0 + per_minute=1000 + per_domain=1000 → 2-row Excel must
+        complete in well under the natural-jitter floor and response must
+        include 'throttle' echo dict."""
+        files = {"excel": ("data.xlsx", _build_xlsx_bytes(),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        data = {
+            "subject": "Hi {name}",
+            "body_html": "<p>{name}</p>",
+            "attachment_basename": "doc",
+            "per_minute": "1000",
+            "per_hour": "10000",
+            "per_day": "100000",
+            "per_domain_per_min": "1000",
+            "delay_min_ms": "0",
+            "delay_max_ms": "0",
+        }
+        t0 = _time.time()
+        r = requests.post(f"{API}/campaigns/send", data=data, files=files,
+                          headers=admin_headers, timeout=60)
+        elapsed = _time.time() - t0
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # 'throttle' echo present and matches overrides
+        assert "throttle" in body, f"response missing 'throttle' key: {body}"
+        echoed = body["throttle"]
+        assert echoed["per_minute"] == 1000
+        assert echoed["per_hour"] == 10000
+        assert echoed["per_day"] == 100000
+        assert echoed["per_domain_per_min"] == 1000
+        assert echoed["delay_min_ms"] == 0
+        assert echoed["delay_max_ms"] == 0
+        # Counters
+        assert body["total"] == 2
+        assert body["sent"] == 0     # SMTP unreachable
+        assert body["failed"] == 2
+        # Should NOT have taken 30+ seconds (no throttling)
+        assert elapsed < 20.0, f"campaign took {elapsed:.1f}s — throttle override not honoured"
+
+    def test_external_send_echoes_throttle(self, admin_headers):
+        # Create a key + template
+        rk = requests.post(f"{API}/api-keys", json={"name": "TEST_thr_key"},
+                           headers=admin_headers, timeout=10)
+        assert rk.status_code == 200
+        raw = rk.json()["key"]
+        kid = rk.json()["id"]
+
+        rt = requests.post(f"{API}/email-templates",
+                           json={"name": "TEST_thr_tpl", "subject": "Hi {name}",
+                                 "body_html": "<p>Hello {name}</p>"},
+                           headers=admin_headers, timeout=10)
+        assert rt.status_code == 200
+        tid = rt.json()["id"]
+
+        try:
+            t0 = _time.time()
+            r = requests.post(
+                f"{API}/external/send",
+                json={
+                    "template_id": tid,
+                    "recipients": [
+                        {"email": "x1@a.com", "name": "X1"},
+                        {"email": "x2@b.com", "name": "X2"},
+                    ],
+                    "per_minute": 1000,
+                    "per_hour": 10000,
+                    "per_day": 100000,
+                    "per_domain_per_min": 1000,
+                    "delay_min_ms": 0,
+                    "delay_max_ms": 0,
+                },
+                headers={"X-API-Key": raw}, timeout=60,
+            )
+            elapsed = _time.time() - t0
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert "throttle" in body, f"missing 'throttle' echo: {body}"
+            echoed = body["throttle"]
+            assert echoed["per_minute"] == 1000
+            assert echoed["delay_min_ms"] == 0
+            assert echoed["delay_max_ms"] == 0
+            assert echoed["per_domain_per_min"] == 1000
+            assert body["total"] == 2
+            assert body["sent"] == 0
+            assert body["failed"] == 2
+            assert elapsed < 20.0, f"external/send took {elapsed:.1f}s"
+        finally:
+            requests.delete(f"{API}/api-keys/{kid}", headers=admin_headers, timeout=10)
+            requests.delete(f"{API}/email-templates/{tid}", headers=admin_headers, timeout=10)
+
+    def test_today_sent_unaffected_by_failed_sends(self, admin_headers):
+        """Since SMTP is unreachable, record_send is never called → daily counter
+        should NOT increment. This also implicitly verifies the daily_quota table
+        exists (otherwise even reading current_daily_count would crash)."""
+        # Baseline
+        r0 = requests.get(f"{API}/throttle/defaults", headers=admin_headers, timeout=10)
+        assert r0.status_code == 200
+        before = r0.json()["today_sent"]
+
+        # Send a campaign that will fail (SMTP unreachable)
+        files = {"excel": ("data.xlsx", _build_xlsx_bytes(),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        data = {
+            "subject": "Hi", "body_html": "<p>x</p>",
+            "per_minute": "10000", "per_domain_per_min": "10000",
+            "delay_min_ms": "0", "delay_max_ms": "0",
+        }
+        rs = requests.post(f"{API}/campaigns/send", data=data, files=files,
+                           headers=admin_headers, timeout=60)
+        assert rs.status_code == 200
+        assert rs.json()["sent"] == 0
+        assert rs.json()["failed"] == 2
+
+        # Counter must NOT have advanced because record_send is success-only
+        r1 = requests.get(f"{API}/throttle/defaults", headers=admin_headers, timeout=10)
+        after = r1.json()["today_sent"]
+        assert after == before, (
+            f"today_sent advanced from {before} to {after} despite no successful sends"
+        )

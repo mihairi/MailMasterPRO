@@ -26,7 +26,8 @@ from auth import (
     get_current_user, require_admin,
 )
 from doc_service import parse_excel, replace_placeholders_text, build_personalized_pdf
-from email_service import send_email
+from email_service import SMTPSession
+from throttle import ThrottleConfig, CampaignThrottler, current_daily_count
 
 # ----------------- app -----------------
 app = FastAPI(title="MailMaster PRO API")
@@ -80,6 +81,13 @@ class SendCampaignExternalInput(BaseModel):
     template_id: str
     word_template_id: Optional[str] = None
     recipients: List[Dict[str, Any]]
+    # Optional per-campaign throttle overrides
+    per_minute: Optional[int] = None
+    per_hour: Optional[int] = None
+    per_day: Optional[int] = None
+    per_domain_per_min: Optional[int] = None
+    delay_min_ms: Optional[int] = None
+    delay_max_ms: Optional[int] = None
 
 
 class ApiKeyCreateInput(BaseModel):
@@ -292,6 +300,13 @@ async def send_campaign(
     excel: UploadFile = File(...),
     word_template_id: Optional[str] = Form(None),
     attachment_basename: str = Form("document"),
+    # throttle overrides
+    per_minute: Optional[int] = Form(None),
+    per_hour: Optional[int] = Form(None),
+    per_day: Optional[int] = Form(None),
+    per_domain_per_min: Optional[int] = Form(None),
+    delay_min_ms: Optional[int] = Form(None),
+    delay_max_ms: Optional[int] = Form(None),
     user=Depends(get_current_user),
 ):
     tmp_xlsx = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", dir=str(UPLOADS_DIR))
@@ -316,6 +331,13 @@ async def send_campaign(
         os.remove(tmp_xlsx.name)
         raise HTTPException(status_code=400, detail="Excel must have at least 2 columns (email, password)")
 
+    cfg = ThrottleConfig(
+        per_minute=per_minute, per_hour=per_hour, per_day=per_day,
+        per_domain_per_min=per_domain_per_min,
+        delay_min_ms=delay_min_ms, delay_max_ms=delay_max_ms,
+    )
+    throttler = CampaignThrottler(cfg)
+
     email_field = headers[0]
     password_field = headers[1]
     campaign_id = gen_id()
@@ -323,12 +345,16 @@ async def send_campaign(
     failure_details: List[Dict[str, str]] = []
 
     workdir = tempfile.mkdtemp(dir=str(UPLOADS_DIR))
+    smtp = None
     try:
-        for row in rows:
+        smtp = await asyncio.to_thread(SMTPSession)
+        await asyncio.to_thread(smtp.__enter__)
+        for idx, row in enumerate(rows):
             recipient = (row.get(email_field) or "").strip()
             password = (row.get(password_field) or "").strip()
             if not recipient:
                 continue
+            await throttler.wait_slot(recipient)
             personalized_subject = replace_placeholders_text(subject, row)
             personalized_body = replace_placeholders_text(body_html, row)
             attachment_path = None
@@ -340,8 +366,9 @@ async def send_campaign(
                         build_personalized_pdf, word_template_path, row, password or None, workdir, out_name
                     )
                     attachment_filename = f"{attachment_basename}.pdf"
-                await asyncio.to_thread(send_email, recipient, personalized_subject, personalized_body, attachment_path, attachment_filename)
+                await asyncio.to_thread(smtp.send, recipient, personalized_subject, personalized_body, attachment_path, attachment_filename)
                 successes += 1
+                await throttler.record_send(recipient)
                 await asyncio.to_thread(_log_send_sync, user["email"], recipient, personalized_subject, attachment_filename, "sent", None, "ui", campaign_id)
             except Exception as e:
                 failures += 1
@@ -349,14 +376,22 @@ async def send_campaign(
                 failure_details.append({"recipient": recipient, "error": err})
                 logger.error("Send failed for %s: %s\n%s", recipient, err, traceback.format_exc())
                 await asyncio.to_thread(_log_send_sync, user["email"], recipient, personalized_subject, attachment_filename, "failed", err, "ui", campaign_id)
+            # jitter between sends (skip after last)
+            if idx < len(rows) - 1:
+                await throttler.jitter_delay()
     finally:
+        if smtp is not None:
+            try:
+                await asyncio.to_thread(smtp.close)
+            except Exception:
+                pass
         shutil.rmtree(workdir, ignore_errors=True)
         try:
             os.remove(tmp_xlsx.name)
         except OSError:
             pass
 
-    return {"campaign_id": campaign_id, "total": successes + failures, "sent": successes, "failed": failures, "failures": failure_details}
+    return {"campaign_id": campaign_id, "total": successes + failures, "sent": successes, "failed": failures, "failures": failure_details, "throttle": cfg.as_dict()}
 
 
 # ----------------- Logs -----------------
@@ -424,16 +459,28 @@ async def external_send(payload: SendCampaignExternalInput, x_api_key: Optional[
             raise HTTPException(status_code=404, detail="Word template not found")
         word_template_path = w["stored_path"]
 
+    cfg = ThrottleConfig(
+        per_minute=payload.per_minute, per_hour=payload.per_hour, per_day=payload.per_day,
+        per_domain_per_min=payload.per_domain_per_min,
+        delay_min_ms=payload.delay_min_ms, delay_max_ms=payload.delay_max_ms,
+    )
+    throttler = CampaignThrottler(cfg)
+
     campaign_id = gen_id()
     successes = failures = 0
     failure_details = []
     workdir = tempfile.mkdtemp(dir=str(UPLOADS_DIR))
+    smtp = None
     try:
-        for row in payload.recipients:
+        smtp = await asyncio.to_thread(SMTPSession)
+        await asyncio.to_thread(smtp.__enter__)
+        recipients = payload.recipients
+        for idx, row in enumerate(recipients):
             recipient = str(row.get("email", "")).strip()
             password = str(row.get("password", "")).strip()
             if not recipient:
                 continue
+            await throttler.wait_slot(recipient)
             data = {k: str(v) for k, v in row.items()}
             personalized_subject = replace_placeholders_text(template["subject"], data)
             personalized_body = replace_placeholders_text(template["body_html"], data)
@@ -446,18 +493,34 @@ async def external_send(payload: SendCampaignExternalInput, x_api_key: Optional[
                         build_personalized_pdf, word_template_path, data, password or None, workdir, out_name
                     )
                     attachment_filename = "document.pdf"
-                await asyncio.to_thread(send_email, recipient, personalized_subject, personalized_body, attachment_path, attachment_filename)
+                await asyncio.to_thread(smtp.send, recipient, personalized_subject, personalized_body, attachment_path, attachment_filename)
                 successes += 1
+                await throttler.record_send(recipient)
                 await asyncio.to_thread(_log_send_sync, key_doc["owner_email"], recipient, personalized_subject, attachment_filename, "sent", None, "api", campaign_id)
             except Exception as e:
                 failures += 1
                 err = f"{type(e).__name__}: {e}"
                 failure_details.append({"recipient": recipient, "error": err})
                 await asyncio.to_thread(_log_send_sync, key_doc["owner_email"], recipient, personalized_subject, attachment_filename, "failed", err, "api", campaign_id)
+            if idx < len(recipients) - 1:
+                await throttler.jitter_delay()
     finally:
+        if smtp is not None:
+            try:
+                await asyncio.to_thread(smtp.close)
+            except Exception:
+                pass
         shutil.rmtree(workdir, ignore_errors=True)
 
-    return {"campaign_id": campaign_id, "total": successes + failures, "sent": successes, "failed": failures, "failures": failure_details}
+    return {"campaign_id": campaign_id, "total": successes + failures, "sent": successes, "failed": failures, "failures": failure_details, "throttle": cfg.as_dict()}
+
+
+# ----------------- Throttle settings (read-only defaults) -----------------
+@api.get("/throttle/defaults")
+async def throttle_defaults(_user=Depends(get_current_user)):
+    cfg = ThrottleConfig().as_dict()
+    cfg["today_sent"] = current_daily_count()
+    return cfg
 
 
 # ----------------- Dashboard stats -----------------
