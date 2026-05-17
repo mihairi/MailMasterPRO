@@ -346,9 +346,15 @@ async def send_campaign(
 
     workdir = tempfile.mkdtemp(dir=str(UPLOADS_DIR))
     smtp = None
+    smtp_connect_err: Optional[Exception] = None
     try:
-        smtp = await asyncio.to_thread(SMTPSession)
-        await asyncio.to_thread(smtp.__enter__)
+        smtp = SMTPSession()
+        try:
+            await asyncio.to_thread(smtp.__enter__)
+        except Exception as e:
+            smtp_connect_err = e
+            smtp = None
+            logger.error("SMTP connect failed: %s", e)
         for idx, row in enumerate(rows):
             recipient = (row.get(email_field) or "").strip()
             password = (row.get(password_field) or "").strip()
@@ -360,6 +366,8 @@ async def send_campaign(
             attachment_path = None
             attachment_filename = None
             try:
+                if smtp_connect_err is not None:
+                    raise smtp_connect_err
                 if word_template_path:
                     out_name = f"{attachment_basename}_{recipient.replace('@','_at_')}.pdf"
                     attachment_path = await asyncio.to_thread(
@@ -374,7 +382,7 @@ async def send_campaign(
                 failures += 1
                 err = f"{type(e).__name__}: {e}"
                 failure_details.append({"recipient": recipient, "error": err})
-                logger.error("Send failed for %s: %s\n%s", recipient, err, traceback.format_exc())
+                logger.error("Send failed for %s: %s", recipient, err)
                 await asyncio.to_thread(_log_send_sync, user["email"], recipient, personalized_subject, attachment_filename, "failed", err, "ui", campaign_id)
             # jitter between sends (skip after last)
             if idx < len(rows) - 1:
@@ -471,9 +479,15 @@ async def external_send(payload: SendCampaignExternalInput, x_api_key: Optional[
     failure_details = []
     workdir = tempfile.mkdtemp(dir=str(UPLOADS_DIR))
     smtp = None
+    smtp_connect_err: Optional[Exception] = None
     try:
-        smtp = await asyncio.to_thread(SMTPSession)
-        await asyncio.to_thread(smtp.__enter__)
+        smtp = SMTPSession()
+        try:
+            await asyncio.to_thread(smtp.__enter__)
+        except Exception as e:
+            smtp_connect_err = e
+            smtp = None
+            logger.error("SMTP connect failed (external): %s", e)
         recipients = payload.recipients
         for idx, row in enumerate(recipients):
             recipient = str(row.get("email", "")).strip()
@@ -487,6 +501,8 @@ async def external_send(payload: SendCampaignExternalInput, x_api_key: Optional[
             attachment_path = None
             attachment_filename = None
             try:
+                if smtp_connect_err is not None:
+                    raise smtp_connect_err
                 if word_template_path:
                     out_name = f"document_{recipient.replace('@','_at_')}.pdf"
                     attachment_path = await asyncio.to_thread(

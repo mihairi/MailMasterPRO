@@ -1,0 +1,26 @@
+{
+  "summary": "Re-ran full backend pytest suite after SMTP connect try/except fix. 28/28 tests passed in 14.45s. The previously critical bug (SMTP connect outside try/except causing HTTP 500) is resolved — both /api/campaigns/send and /api/external/send now correctly return 200 with campaign_id and throttle echo while logging per-recipient failures when SMTP is unreachable.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (28/28)", "frontend": "N/A"},
+  "test_credentials": "Admin: admin@example.com / admin123 (from request)",
+  "seed_data_creation": "None — used existing fixtures from backend_test.py",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 28 backend tests pass. SMTP-failure path is covered by TestCampaignSend::test_send_campaign_smtp_fails_logs_written and TestThrottle::test_today_sent_unaffected_by_failed_sends, both green. No frontend testing was requested in this iteration.",
+  "rca of the issue": "Previous issue: SMTPSession.__enter__() raised socket/connect errors outside the per-recipient try/except, propagating an unhandled exception → HTTP 500. Fix verified: connect is wrapped, error captured in smtp_connect_err and re-raised inside each per-recipient try/except, so each recipient row gets a failed send_log and the endpoint returns 200 with campaign_id + throttle echo."
+}
