@@ -84,43 +84,14 @@ android-sdk/-e
 .env
 .env.*
 *.env
+!.env.example
+!*/.env.example
 credentials.json
 *.pem
 *.key
 .credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
+
+# MailMaster PRO — runtime data (encrypted DB, uploaded templates, build artefacts)
+backend/data/
+backend/storage/
+backend/.venv/
